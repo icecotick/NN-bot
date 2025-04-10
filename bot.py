@@ -96,4 +96,4 @@ async def mute(ctx, member: discord.Member, duration: int = 0):
 async def ping(ctx):
     await ctx.send("Pong!")
 
-bot.run(os.getenv(DISCORD_TOKEN))
+bot.run(os.getenv("DISCORD_TOKEN"))
