@@ -1,5 +1,0 @@
-.env
-__pycache__/
-*.pyc
-*.log
-cenzor_words.txt
