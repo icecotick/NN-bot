@@ -60,7 +60,7 @@ async def on_ready():
     print(f"✅ Бот запущен как {bot.user}")
 
 @bot.command(name="славитьпартиюнн")
-@commands.cooldown(rate=1, per=14400, type=commands.BucketType.user)
+@commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
 async def slav_party(ctx):
     user = ctx.author
     role = discord.utils.get(ctx.guild.roles, name=ROLE_NAME)
