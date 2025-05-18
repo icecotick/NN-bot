@@ -35,8 +35,8 @@ def update_balance(user_id, amount):
 # Настройка бота
 TOKEN = os.getenv("DISCORD_TOKEN")
 ROLE_NAME = "Патриот"
-CRIT_CHANCE = 5  # 5% шанс крита
-SUCCESS_CHANCE = 20  # 20% общий шанс успеха
+CRIT_CHANCE = 10  # 5% шанс крита
+SUCCESS_CHANCE = 40  # 20% общий шанс успеха
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -101,7 +101,7 @@ async def farm(ctx):
         await ctx.send("⛔ Эта команда доступна только для Патриотов.")
         return
 
-    reward = random.randint(5, 15)
+    reward = random.randint(10, 40)
     update_balance(user.id, reward)
     await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {get_balance(user.id)})")
 
