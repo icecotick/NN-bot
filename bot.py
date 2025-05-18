@@ -16,12 +16,6 @@ def init_db():
                       balance INTEGER DEFAULT 0)''')
         conn.commit()
 
-init_db()
-def get_all_user_balances():
-    with closing(sqlite3.connect('economy.db')) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, balance FROM users ORDER BY balance DESC")
-        return cursor.fetchall()
 # Функции для работы с валютой
 def get_balance(user_id):
     with closing(sqlite3.connect('economy.db')) as conn:
