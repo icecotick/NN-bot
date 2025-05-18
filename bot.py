@@ -4,6 +4,8 @@ import random
 import os
 import sqlite3
 import asyncio
+import time  # для антиспама
+
 
 # Инициализация базы данных
 def init_db():
