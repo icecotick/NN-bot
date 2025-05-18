@@ -35,8 +35,8 @@ def update_balance(user_id, amount):
 # Настройка бота
 TOKEN = os.getenv("DISCORD_TOKEN")
 ROLE_NAME = "Патриот"
-CRIT_CHANCE = 5  # 5% шанс крита
-SUCCESS_CHANCE = 20  # 20% общий шанс успеха
+CRIT_CHANCE = 10  # 5% шанс крита
+SUCCESS_CHANCE = 40  # 20% общий шанс успеха
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -60,7 +60,7 @@ async def on_ready():
     print(f"✅ Бот запущен как {bot.user}")
 
 @bot.command(name="славитьпартиюнн")
-@commands.cooldown(rate=1, per=14400, type=commands.BucketType.user)
+@commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
 async def slav_party(ctx):
     user = ctx.author
     role = discord.utils.get(ctx.guild.roles, name=ROLE_NAME)
