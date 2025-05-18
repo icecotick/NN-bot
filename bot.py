@@ -18,6 +18,7 @@ def init_db():
 
 init_db()
 
+farm_timers = {}  # user_id: timestamp
 # Функции для работы с валютой
 def get_balance(user_id):
     conn = sqlite3.connect('economy.db')
@@ -106,6 +107,70 @@ async def transfer(ctx, member: discord.Member, amount: int):
     update_balance(ctx.author.id, -amount)
     update_balance(member.id, amount)
     await ctx.send(f'✅ {ctx.author.mention} перевел {amount} рейтинга {member.mention}!')
+
+@bot.command(name="фарм")
+async def farm(ctx):
+    user = ctx.author
+    role = discord.utils.get(user.roles, name=ROLE_NAME)
+
+    if not role:
+        await ctx.send("⛔ Эта команда доступна только для Патриотов.")
+        return
+
+    now = time.time()
+    last_used = farm_timers.get(user.id, 0)
+    cooldown = 1200  # 20 минут
+
+    if now - last_used < cooldown:
+        remaining = int(cooldown - (now - last_used))
+        minutes = remaining // 60
+        seconds = remaining % 60
+        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед следующим фармом.")
+        return
+
+    reward = random.randint(5, 15)
+    update_balance(user.id, reward)
+    balance = get_balance(user.id)
+    farm_timers[user.id] = now
+
+    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {balance})")
+
+@bot.command(name="топ")
+async def top(ctx):
+    conn = sqlite3.connect('economy.db')
+    c = conn.cursor()
+    c.execute("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10")
+    top_users = c.fetchall()
+    conn.close()
+
+    if not top_users:
+        await ctx.send("😔 Таблица пуста.")
+        return
+
+    leaderboard = ""
+    for i, (user_id, balance) in enumerate(top_users, start=1):
+        user = await bot.fetch_user(user_id)
+        leaderboard += f"{i}. {user.name} — {balance} кредитов\n"
+
+    await ctx.send(f"🏆 **Топ 10 Патриотов:**\n{leaderboard}")
+@bot.command(name="помощь")
+async def help_command(ctx):
+    help_text = """
+📜 **Команды бота:**
+
+🔴 `!славитьпартиюнн` — попытка стать Патриотом и получить рейтинг. Шанс успеха 20%, шанс крита 5%.
+
+🌾 `!фарм` — заработать немного соц. кредитов (только для Патриотов, раз в 20 минут).
+
+💰 `!баланс` — показать ваш текущий рейтинг.
+
+💸 `!перевести @пользователь сумма` — перевести соц. кредиты другому участнику.
+
+🏆 `!топ` — топ-10 пользователей по рейтингу.
+
+ℹ️ `!помощь` — показать список команд.
+"""
+    await ctx.send(help_text)
 
 # Запуск бота
 bot.run(TOKEN)
