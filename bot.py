@@ -128,7 +128,7 @@ async def farm(ctx):
         await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед следующим фармом.")
         return
 
-    reward = random.randint(5, 15)
+    reward = random.randint(10, 20)
     update_balance(user.id, reward)
     balance = get_balance(user.id)
     farm_timers[user.id] = now
