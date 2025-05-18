@@ -1,1 +1,0 @@
-worker: /usr/bin/python3 bot.py
