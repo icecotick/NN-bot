@@ -6,6 +6,7 @@ import os
 import sqlite3
 import time
 from contextlib import closing
+from discord import Colour
 
 # Инициализация базы данных
 def init_db():
@@ -16,7 +17,11 @@ def init_db():
         conn.commit()
 
 init_db()
-
+def get_all_user_balances():
+    with closing(sqlite3.connect('economy.db')) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, balance FROM users ORDER BY balance DESC")
+        return cursor.fetchall()
 # Функции для работы с валютой
 def get_balance(user_id):
     with closing(sqlite3.connect('economy.db')) as conn:
@@ -44,6 +49,8 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+SHOP_ROLE_PRICE = 2000
+SHOP_ROLE_COLOR = Colour.gold()  # Цвет роли (можно изменить)
 # Обработчик ошибок
 @bot.event
 async def on_command_error(ctx, error):
@@ -161,5 +168,58 @@ async def help_command(ctx):
 ℹ️ `!помощь` — это сообщение
 """
     await ctx.send(help_text)
+    @bot.command(name="магазин")
+async def shop(ctx):
+    """Показывает доступные товары"""
+    embed = discord.Embed(
+        title="🏪 Магазин Партии НН",
+        description=f"Ваш баланс: {get_balance(ctx.author.id)} соц. кредитов",
+        color=0x00ff00
+    )
+    embed.add_field(
+        name="🎖️ Кастомная роль",
+        value=f"Цена: {SHOP_ROLE_PRICE} кредитов\n`!купитьроль НазваниеРоли`",
+        inline=False
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="купитьроль")
+async def buy_role(ctx, *, role_name: str):
+    """Покупка кастомной роли"""
+    user = ctx.author
+    balance = get_balance(user.id)
+    
+    # Проверка баланса
+    if balance < SHOP_ROLE_PRICE:
+        await ctx.send(f"❌ Недостаточно средств! Нужно {SHOP_ROLE_PRICE} кредитов.")
+        return
+    
+    # Проверка длины названия
+    if len(role_name) > 25:
+        await ctx.send("❌ Название роли слишком длинное (макс. 25 символов)")
+        return
+    
+    # Создаем/проверяем роль
+    try:
+        new_role = await ctx.guild.create_role(
+            name=role_name,
+            color=SHOP_ROLE_COLOR,
+            reason=f"Куплена пользователем {user.name}"
+        )
+        await user.add_roles(new_role)
+        update_balance(user.id, -SHOP_ROLE_PRICE)
+        
+        embed = discord.Embed(
+            title="🎉 Покупка успешна!",
+            description=f"Вы получили роль {new_role.mention} за {SHOP_ROLE_PRICE} кредитов",
+            color=SHOP_ROLE_COLOR
+        )
+        embed.set_footer(text=f"Остаток: {get_balance(user.id)} кредитов")
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Ошибка при создании роли: {e}")
+        if 'new_role' in locals():
+            await new_role.delete()
 
 bot.run(TOKEN)
