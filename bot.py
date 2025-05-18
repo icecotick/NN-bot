@@ -1,11 +1,10 @@
 import discord
 from discord.ext import commands
+from discord.ext.commands import CommandOnCooldown
 import random
 import os
 import sqlite3
-import asyncio
-import time  # для антиспама
-
+import time
 
 # Инициализация базы данных
 def init_db():
@@ -18,7 +17,6 @@ def init_db():
 
 init_db()
 
-farm_timers = {}  # user_id: timestamp
 # Функции для работы с валютой
 def get_balance(user_id):
     conn = sqlite3.connect('economy.db')
@@ -48,12 +46,24 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Обработчик ошибок кулдауна
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, CommandOnCooldown):
+        seconds = int(error.retry_after)
+        minutes = seconds // 60
+        seconds = seconds % 60
+        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с, прежде чем использовать эту команду снова.")
+    else:
+        raise error
+
 @bot.event
 async def on_ready():
     print(f"✅ Бот запущен как {bot.user}")
 
-# Основная команда
+# Команда славитьпартиюнн с кулдауном 4 часа
 @bot.command(name="славитьпартиюнн")
+@commands.cooldown(rate=1, per=14400, type=commands.BucketType.user)  # 4 часа
 async def slav_party(ctx):
     user = ctx.author
     role = discord.utils.get(ctx.guild.roles, name=ROLE_NAME)
@@ -69,30 +79,46 @@ async def slav_party(ctx):
     roll = random.randint(1, 100)
     balance = get_balance(user.id)
 
-    # Крит
     if roll <= CRIT_CHANCE:
         await user.add_roles(role)
         update_balance(user.id, 1000)
         await ctx.send(f'💥 **КРИТ!** {user.mention}, ты получил роль + 1000 социального рейтинга! (Баланс: {balance + 1000})')
-    
-    # Обычный успех
+
     elif roll <= SUCCESS_CHANCE:
         await user.add_roles(role)
         update_balance(user.id, 100)
         await ctx.send(f'🟥 {user.mention}, ты получил роль + 100 рейтинга! (Баланс: {balance + 100})')
-    
-    # Неудача
+
     else:
-        penalty = min(10, balance)  # Не уходим в минус
+        penalty = min(10, balance)
         update_balance(user.id, -penalty)
         await ctx.send(f'🕊 {user.mention}, -{penalty} рейтинга. Попробуй ещё! (Баланс: {balance - penalty})')
 
-# Команды экономики
+# Команда фарм с кулдауном 20 минут
+@bot.command(name="фарм")
+@commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)  # 20 минут
+async def farm(ctx):
+    user = ctx.author
+    role = discord.utils.get(user.roles, name=ROLE_NAME)
+
+    if not role:
+        await ctx.send("⛔ Эта команда доступна только для Патриотов.")
+        return
+
+    reward = random.randint(5, 15)
+    update_balance(user.id, reward)
+    balance = get_balance(user.id)
+
+    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {balance})")
+
+# Команда баланс с кулдауном 5 секунд
 @bot.command(name="баланс")
+@commands.cooldown(rate=1, per=5, type=commands.BucketType.user)  # 5 секунд
 async def balance(ctx):
     balance = get_balance(ctx.author.id)
     await ctx.send(f'💰 {ctx.author.mention}, ваш баланс: {balance}')
 
+# Команда перевести (без кулдауна)
 @bot.command(name="перевести")
 async def transfer(ctx, member: discord.Member, amount: int):
     if amount <= 0:
@@ -108,34 +134,9 @@ async def transfer(ctx, member: discord.Member, amount: int):
     update_balance(member.id, amount)
     await ctx.send(f'✅ {ctx.author.mention} перевел {amount} рейтинга {member.mention}!')
 
-@bot.command(name="фарм")
-async def farm(ctx):
-    user = ctx.author
-    role = discord.utils.get(user.roles, name=ROLE_NAME)
-
-    if not role:
-        await ctx.send("⛔ Эта команда доступна только для Патриотов.")
-        return
-
-    now = time.time()
-    last_used = farm_timers.get(user.id, 0)
-    cooldown = 1200  # 20 минут
-
-    if now - last_used < cooldown:
-        remaining = int(cooldown - (now - last_used))
-        minutes = remaining // 60
-        seconds = remaining % 60
-        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед следующим фармом.")
-        return
-
-    reward = random.randint(10, 20)
-    update_balance(user.id, reward)
-    balance = get_balance(user.id)
-    farm_timers[user.id] = now
-
-    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {balance})")
-
+# Команда топ с кулдауном 5 секунд
 @bot.command(name="топ")
+@commands.cooldown(rate=1, per=5, type=commands.BucketType.user)  # 5 секунд
 async def top(ctx):
     conn = sqlite3.connect('economy.db')
     c = conn.cursor()
@@ -153,6 +154,8 @@ async def top(ctx):
         leaderboard += f"{i}. {user.name} — {balance} кредитов\n"
 
     await ctx.send(f"🏆 **Топ 10 Патриотов:**\n{leaderboard}")
+
+# Команда помощь
 @bot.command(name="помощь")
 async def help_command(ctx):
     help_text = """
