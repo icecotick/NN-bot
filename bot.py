@@ -35,7 +35,7 @@ async def slav_party(ctx):
         await ctx.send(f'🟥 {user.mention}, ты уже **Патриот**!')
         return
 
-    if random.randint(1, 100) <= 20:
+    if random.randint(1, 100) <= 3:
         await user.add_roles(role)
         await ctx.send(f'🟥 {user.mention}, ты получил звание **Патриот**! Слава партии НН!')
     else:
