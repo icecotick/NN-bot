@@ -6,7 +6,6 @@ import os
 import sqlite3
 import time
 from contextlib import closing
-from discord import Colour
 
 # Инициализация базы данных
 def init_db():
@@ -15,6 +14,8 @@ def init_db():
                      (user_id INTEGER PRIMARY KEY, 
                       balance INTEGER DEFAULT 0)''')
         conn.commit()
+
+init_db()
 
 # Функции для работы с валютой
 def get_balance(user_id):
@@ -34,8 +35,8 @@ def update_balance(user_id, amount):
 # Настройка бота
 TOKEN = os.getenv("DISCORD_TOKEN")
 ROLE_NAME = "Патриот"
-CRIT_CHANCE = 10  # 5% шанс крита
-SUCCESS_CHANCE = 40  # 20% общий шанс успеха
+CRIT_CHANCE = 5  # 5% шанс крита
+SUCCESS_CHANCE = 20  # 20% общий шанс успеха
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -43,8 +44,6 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-SHOP_ROLE_PRICE = 2000
-SHOP_ROLE_COLOR = Colour.gold()  # Цвет роли (можно изменить)
 # Обработчик ошибок
 @bot.event
 async def on_command_error(ctx, error):
@@ -61,7 +60,7 @@ async def on_ready():
     print(f"✅ Бот запущен как {bot.user}")
 
 @bot.command(name="славитьпартиюнн")
-@commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
+@commands.cooldown(rate=1, per=14400, type=commands.BucketType.user)
 async def slav_party(ctx):
     user = ctx.author
     role = discord.utils.get(ctx.guild.roles, name=ROLE_NAME)
@@ -88,7 +87,7 @@ async def slav_party(ctx):
         await ctx.send(f'🟥 {user.mention}, ты получил роль + 100 рейтинга! (Баланс: {get_balance(user.id)})')
 
     else:
-        penalty = min(5, balance)
+        penalty = min(10, balance)
         update_balance(user.id, -penalty)
         await ctx.send(f'🕊 {user.mention}, -{penalty} рейтинга. Попробуй ещё! (Баланс: {get_balance(user.id)})')
 
@@ -102,7 +101,7 @@ async def farm(ctx):
         await ctx.send("⛔ Эта команда доступна только для Патриотов.")
         return
 
-    reward = random.randint(10, 40)
+    reward = random.randint(5, 15)
     update_balance(user.id, reward)
     await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {get_balance(user.id)})")
 
@@ -160,62 +159,7 @@ async def help_command(ctx):
 💸 `!перевести @юзер сумма` — перевод кредитов
 🏆 `!топ` — топ-10 по балансу (5с кд)
 ℹ️ `!помощь` — это сообщение
-🏪 `!магазин` —  это магазин где можно купить что-то за соц. кредиты
-🎖️ `!купитьроль` — можно купить за 2к соц кредитов
 """
     await ctx.send(help_text)
-    @bot.command(name="магазин")
-async def shop(ctx):
-    """Показывает доступные товары"""
-    embed = discord.Embed(
-        title="🏪 Магазин Партии НН",
-        description=f"Ваш баланс: {get_balance(ctx.author.id)} соц. кредитов",
-        color=0x00ff00
-    )
-    embed.add_field(
-        name="🎖️ Кастомная роль",
-        value=f"Цена: {SHOP_ROLE_PRICE} кредитов\n`!купитьроль НазваниеРоли`",
-        inline=False
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="купитьроль")
-async def buy_role(ctx, *, role_name: str):
-    """Покупка кастомной роли"""
-    user = ctx.author
-    balance = get_balance(user.id)
-    
-    # Проверка баланса
-    if balance < SHOP_ROLE_PRICE:
-        await ctx.send(f"❌ Недостаточно средств! Нужно {SHOP_ROLE_PRICE} кредитов.")
-        return
-    
-    # Проверка длины названия
-    if len(role_name) > 25:
-        await ctx.send("❌ Название роли слишком длинное (макс. 25 символов)")
-        return
-    
-    # Создаем/проверяем роль
-    try:
-        new_role = await ctx.guild.create_role(
-            name=role_name,
-            color=SHOP_ROLE_COLOR,
-            reason=f"Куплена пользователем {user.name}"
-        )
-        await user.add_roles(new_role)
-        update_balance(user.id, -SHOP_ROLE_PRICE)
-        
-        embed = discord.Embed(
-            title="🎉 Покупка успешна!",
-            description=f"Вы получили роль {new_role.mention} за {SHOP_ROLE_PRICE} кредитов",
-            color=SHOP_ROLE_COLOR
-        )
-        embed.set_footer(text=f"Остаток: {get_balance(user.id)} кредитов")
-        await ctx.send(embed=embed)
-        
-    except Exception as e:
-        await ctx.send(f"❌ Ошибка при создании роли: {e}")
-        if 'new_role' in locals():
-            await new_role.delete()
 
 bot.run(TOKEN)
