@@ -188,8 +188,8 @@ async def buckshot(ctx, bet: int):
     embed.set_image(url=BUCKSHOT_GIF)
     await ctx.send(embed=embed)
 
-    # Таймер отмены (2 минуты)
-    await asyncio.sleep(120)
+    # Таймер отмены (4 минуты)
+    await asyncio.sleep(4)
     if ctx.channel.id in active_buckshots:
         await update_balance(ctx.author.id, bet)  # Возвращаем ставку
         del active_buckshots[ctx.channel.id]
@@ -284,7 +284,7 @@ async def farm(ctx):
         await ctx.send("⛔ Только для Патриотов!")
         return
 
-    base_reward = random.randint(5, 15)
+    base_reward = random.randint(20, 50)
     
     if EVENT_ACTIVE and EVENT_TYPE == "фарм":
         reward = int(base_reward * EVENT_MULTIPLIER)
