@@ -37,7 +37,7 @@ EVENT_END_TIME = 0
 
 # NEW: Глобальные переменные для бакшота
 active_buckshots = {}  # {channel_id: {"host": user_id, "bet": amount, "participant": None}}
-BUCKSHOT_GIF = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcDl6d2UyYnR5Y2VjZ3R4d2VtY2VjZ3R4d2VtY2VjZ3R4d2VtY2VjZ3R4d2VtY2VjZ3QxMiJ9/giphy.gif"
+BUCKSHOT_GIF = "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExb21peDBuYWEzazhhb2EweWhzazd3NjkydnZ0dHI5M2x6b3d5aHdtdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/DQb9xdHQwFl9fvJ1ls/giphy.gif"
 
 def is_admin(member: discord.Member) -> bool:
     """Проверяет, является ли пользователь администратором"""
