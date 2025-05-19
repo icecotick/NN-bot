@@ -25,7 +25,14 @@ CASINO_MULTIPLIERS = {
     3: 10,  # x3 (10% шанс)
     5: 2,   # x5 (2% шанс)
     0: 53   # Проигрыш (53% шанс)
+    # Константы для ивентов
+
 }
+# Константы для ивентов
+EVENT_ACTIVE = False
+EVENT_MULTIPLIER = 1.0
+EVENT_TYPE = None
+EVENT_END_TIME = 0
 
 def is_admin(member: discord.Member) -> bool:
     """Проверяет, является ли пользователь администратором"""
@@ -167,20 +174,25 @@ async def slav_party(ctx):
         penalty = min(10, balance)
         await update_balance(user.id, -penalty)
         await ctx.send(f'🕊 {user.mention}, -{penalty} кредитов. Попробуй ещё! (Баланс: {await get_balance(user.id)})')
-
+        
 @bot.command(name="фарм")
 @commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)
 async def farm(ctx):
-    user = ctx.author
-    role = discord.utils.get(ctx.guild.roles, name=ROLE_NAME)
-
-    if not role or role not in user.roles:
+    if not discord.utils.get(ctx.author.roles, name=ROLE_NAME):
         await ctx.send("⛔ Только для Патриотов!")
         return
 
-    reward = random.randint(5, 15)
-    await update_balance(user.id, reward)
-    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} кредитов! (Баланс: {await get_balance(user.id)})")
+    base_reward = random.randint(5, 15)
+    
+    if EVENT_ACTIVE and EVENT_TYPE == "фарм":
+        reward = int(base_reward * EVENT_MULTIPLIER)
+        event_bonus = f" (Ивент x{EVENT_MULTIPLIER})"
+    else:
+        reward = base_reward
+        event_bonus = ""
+    
+    update_balance(ctx.author.id, reward)
+    await ctx.send(f"🌾 {ctx.author.mention}, вы получили {reward} кредитов{event_bonus}! Баланс: {get_balance(ctx.author.id)}")
 
 @bot.command(name="баланс")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
@@ -314,7 +326,41 @@ async def casino(ctx, amount: int):
         win = amount * result
         await update_balance(user.id, win)
         await ctx.send(f"🎰 {user.mention} ставит {amount} и выигрывает x{result}! 🎉 +{win} кредитов!")
+        
+@bot.command(name="ивент_старт")
+@commands.has_permissions(administrator=True)
+async def start_event(ctx, hours: int, multiplier: float, event_type: str = "фарм"):
+    global EVENT_ACTIVE, EVENT_MULTIPLIER, EVENT_TYPE, EVENT_END_TIME
+    
+    EVENT_ACTIVE = True
+    EVENT_MULTIPLIER = multiplier
+    EVENT_TYPE = event_type.lower()
+    EVENT_END_TIME = time.time() + hours * 3600
+    
+    embed = discord.Embed(
+        title="🎊 ИВЕНТ АКТИВИРОВАН!",
+        description=f"**{event_type.upper()}** дает x{multiplier} награды!\nДействует {hours} часов.",
+        color=0xffd700
+    )
+    await ctx.send(embed=embed)
 
+@bot.command(name="ивент_статус")
+async def event_status(ctx):
+    if EVENT_ACTIVE:
+        remaining = int((EVENT_END_TIME - time.time()) // 60)
+        embed = discord.Embed(
+            title="📢 Активный ивент",
+            description=f"**Тип:** {EVENT_TYPE}\n**Множитель:** x{EVENT_MULTIPLIER}\n**Осталось:** {remaining} минут",
+            color=0x00ff00
+        )
+    else:
+        embed = discord.Embed(
+            title="ℹ️ Ивентов нет",
+            description="Админы могут запустить командой `!ивент_старт`",
+            color=0xff0000
+        )
+    await ctx.send(embed=embed)
+    
 @bot.command(name="магазин")
 async def shop(ctx):
     shop_text = f"""
