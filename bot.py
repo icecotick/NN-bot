@@ -188,8 +188,8 @@ async def buckshot(ctx, bet: int):
     embed.set_image(url=BUCKSHOT_GIF)
     await ctx.send(embed=embed)
 
-    # Таймер отмены (4 минуты)
-    await asyncio.sleep(4)
+    # Таймер отмены (2 минуты)
+    await asyncio.sleep(240)
     if ctx.channel.id in active_buckshots:
         await update_balance(ctx.author.id, bet)  # Возвращаем ставку
         del active_buckshots[ctx.channel.id]
