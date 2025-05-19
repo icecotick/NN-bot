@@ -6,6 +6,7 @@ import os
 import asyncpg
 import sys
 import asyncio
+import time
 from typing import Optional
 
 # Настройки
@@ -20,40 +21,28 @@ ROB_CHANCE = 25  # Шанс успешной кражи
 ROB_PERCENT = 20  # Процент кражи/штрафа
 ROB_COOLDOWN = 3600  # 1 час кулдауна
 CASINO_COOLDOWN = 60  # 1 минута кулдауна
+BUCKSHOT_COOLDOWN = 1800  # 30 минут кулдауна для бакшота # NEW
 CASINO_MULTIPLIERS = {
     2: 35,  # x2 (35% шанс)
     3: 10,  # x3 (10% шанс)
     5: 2,   # x5 (2% шанс)
     0: 53   # Проигрыш (53% шанс)
-    # Константы для ивентов
-
 }
+
 # Константы для ивентов
 EVENT_ACTIVE = False
 EVENT_MULTIPLIER = 1.0
 EVENT_TYPE = None
 EVENT_END_TIME = 0
-active_duels = {}
+
+# NEW: Глобальные переменные для бакшота
+active_buckshots = {}  # {channel_id: {"host": user_id, "bet": amount, "participant": None}}
+BUCKSHOT_GIF = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcDl6d2UyYnR5Y2VjZ3R4d2VtY2VjZ3R4d2VtY2VjZ3R4d2VtY2VjZ3R4d2VtY2VjZ3QxMiJ9/giphy.gif"
 
 def is_admin(member: discord.Member) -> bool:
     """Проверяет, является ли пользователь администратором"""
     return any(role.name.lower() in ADMIN_ROLES for role in member.roles)
-# Система ивентов
-async def check_events():
-    while True:
-        global EVENT_ACTIVE
-        if EVENT_ACTIVE and time.time() > EVENT_END_TIME:
-            EVENT_ACTIVE = False
-            print("Ивент завершен")
-        await asyncio.sleep(60)
-        # Система дуэлей
-async def duel_timeout(channel):
-    await asyncio.sleep(120)
-    if channel.id in active_duels:
-        host_id = active_duels[channel.id]["host"]
-        update_balance(host_id, active_duels[channel.id]["bet"])
-        del active_duels[channel.id]
-        await channel.send("🕒 Время дуэли вышло!")
+
 # Проверка обязательных переменных
 if not TOKEN:
     print("❌ Ошибка: Не установлен DISCORD_TOKEN")
@@ -161,6 +150,103 @@ async def on_command_error(ctx, error):
         print(f"⚠ Ошибка команды: {error}")
         await ctx.send("❌ Произошла ошибка при выполнении команды")
 
+# NEW: Бакшот-рулетка (дуэль 1v1)
+@bot.command(name="бакшот")
+@commands.cooldown(1, BUCKSHOT_COOLDOWN, commands.BucketType.user)
+async def buckshot(ctx, bet: int):
+    """Создать дуэль 1v1 с указанной ставкой"""
+    if bet < 100:
+        await ctx.send("❌ Минимальная ставка - 100 кредитов!")
+        return
+    
+    balance = await get_balance(ctx.author.id)
+    if balance < bet:
+        await ctx.send("❌ Недостаточно средств!")
+        return
+
+    # Проверка активных дуэлей
+    if ctx.channel.id in active_buckshots:
+        await ctx.send("❌ В этом канале уже есть активная дуэль!")
+        return
+
+    # Блокируем средства
+    await update_balance(ctx.author.id, -bet)
+    active_buckshots[ctx.channel.id] = {
+        "host": ctx.author.id,
+        "bet": bet,
+        "participant": None
+    }
+
+    # Красивое оформление
+    embed = discord.Embed(
+        title="💥 Бакшот-дуэль начата!",
+        description=f"{ctx.author.mention} ставит **{bet}** кредитов!\n"
+                    f"Первый, кто напишет `!присоединиться`, сразится с ним.\n"
+                    f"Победитель забирает **{bet*2}** кредитов!",
+        color=0xff0000
+    )
+    embed.set_image(url=BUCKSHOT_GIF)
+    await ctx.send(embed=embed)
+
+    # Таймер отмены (2 минуты)
+    await asyncio.sleep(120)
+    if ctx.channel.id in active_buckshots:
+        await update_balance(ctx.author.id, bet)  # Возвращаем ставку
+        del active_buckshots[ctx.channel.id]
+        await ctx.send("🕒 Время вышло! Дуэль отменена.")
+
+@bot.command(name="присоединиться")
+async def join_buckshot(ctx):
+    """Присоединиться к активной дуэли"""
+    if ctx.channel.id not in active_buckshots:
+        await ctx.send("❌ В этом канале нет активных дуэлей!")
+        return
+    
+    duel = active_buckshots[ctx.channel.id]
+    
+    # Проверки
+    if duel["participant"] is not None:
+        await ctx.send("❌ Кто-то уже присоединился к дуэли!")
+        return
+    
+    if ctx.author.id == duel["host"]:
+        await ctx.send("❌ Нельзя присоединиться к своей дуэли!")
+        return
+    
+    balance = await get_balance(ctx.author.id)
+    if balance < duel["bet"]:
+        await ctx.send(f"❌ Для участия нужно {duel['bet']} кредитов!")
+        return
+
+    # Блокируем средства участника
+    await update_balance(ctx.author.id, -duel["bet"])
+    duel["participant"] = ctx.author.id
+
+    # Анимация дуэли
+    msg = await ctx.send("🔫 **Дуэль начинается...**\n3...")
+    await asyncio.sleep(1)
+    await msg.edit(content="🔫 **Дуэль начинается...**\n2...")
+    await asyncio.sleep(1)
+    await msg.edit(content="🔫 **Дуэль начинается...**\n1...")
+    await asyncio.sleep(1)
+
+    # Определяем победителя (50/50)
+    winner_id = random.choice([duel["host"], duel["participant"]])
+    total_pot = duel["bet"] * 2
+    await update_balance(winner_id, total_pot)
+    winner = await bot.fetch_user(winner_id)
+
+    # Результат
+    embed = discord.Embed(
+        title="🎉 Дуэль завершена!",
+        description=f"Победитель: {winner.mention}\n"
+                    f"Выигрыш: **{total_pot}** кредитов!",
+        color=0x00ff00
+    )
+    embed.set_image(url=BUCKSHOT_GIF)
+    await ctx.send(embed=embed)
+    del active_buckshots[ctx.channel.id]
+
 @bot.command(name="славанн")
 @commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
 async def slav_party(ctx):
@@ -207,8 +293,8 @@ async def farm(ctx):
         reward = base_reward
         event_bonus = ""
     
-    update_balance(ctx.author.id, reward)
-    await ctx.send(f"🌾 {ctx.author.mention}, вы получили {reward} кредитов{event_bonus}! Баланс: {get_balance(ctx.author.id)}")
+    await update_balance(ctx.author.id, reward)
+    await ctx.send(f"🌾 {ctx.author.mention}, вы получили {reward} кредитов{event_bonus}! Баланс: {await get_balance(ctx.author.id)}")
 
 @bot.command(name="баланс")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
@@ -281,73 +367,6 @@ async def remove_credits(ctx, member: discord.Member, amount: int):
     
     await update_balance(member.id, -amount)
     await ctx.send(f"✅ Админ {ctx.author.mention} снял {amount} кредитов у {member.mention}")
-    # Дуэльная система
-@bot.command(name="бакшот_хост")
-@commands.cooldown(1, 300, commands.BucketType.user)
-async def host_duel(ctx, bet: int):
-    if bet < 100:
-        await ctx.send("❌ Минимальная ставка: 100 кредитов!")
-        return
-    
-    balance = get_balance(ctx.author.id)
-    if balance < bet:
-        await ctx.send("❌ Недостаточно средств!")
-        return
-
-    update_balance(ctx.author.id, -bet)
-    active_duels[ctx.channel.id] = {
-        "host": ctx.author.id,
-        "bet": bet,
-        "participant": None
-    }
-    
-    embed = discord.Embed(
-        title="💥 Дуэль создана!",
-        description=f"{ctx.author.mention} ставит {bet} кредитов!\n"
-                    f"Присоединяйся: `!бакшот_присоединиться`",
-        color=0xff0000
-    )
-    await ctx.send(embed=embed)
-    await duel_timeout(ctx.channel)
-
-@bot.command(name="бакшот_присоединиться")
-async def join_duel(ctx):
-    if ctx.channel.id not in active_duels:
-        await ctx.send("❌ Нет активных дуэлей!")
-        return
-        
-    duel = active_duels[ctx.channel.id]
-    if duel["participant"] or ctx.author.id == duel["host"]:
-        await ctx.send("❌ Невозможно присоединиться!")
-        return
-
-    if get_balance(ctx.author.id) < duel["bet"]:
-        await ctx.send(f"❌ Нужно {duel['bet']} кредитов!")
-        return
-
-    update_balance(ctx.author.id, -duel["bet"])
-    duel["participant"] = ctx.author.id
-    
-    # Анимация дуэли
-    msg = await ctx.send("🔫 Дуэль начинается... 3")
-    for i in range(2, 0, -1):
-        await asyncio.sleep(1)
-        await msg.edit(content=f"🔫 Дуэль начинается... {i}")
-    await asyncio.sleep(1)
-    
-    # Определение победителя
-    winner_id = random.choice([duel["host"], duel["participant"]])
-    update_balance(winner_id, duel["bet"]*2)
-    winner = await bot.fetch_user(winner_id)
-    
-    embed = discord.Embed(
-        title="🎉 Победитель дуэли!",
-        description=f"{winner.mention} забирает {duel['bet']*2} кредитов!",
-        color=0x00ff00
-    )
-    await ctx.send(embed=embed)
-    del active_duels[ctx.channel.id]
-
 
 @bot.command(name="ограбить")
 @commands.cooldown(rate=1, per=ROB_COOLDOWN, type=commands.BucketType.user)
@@ -452,6 +471,9 @@ async def shop(ctx):
 🎨 `!купитьроль "Название" #Цвет` - Кастомная роль ({CUSTOM_ROLE_PRICE} кредитов)
 Пример: `!купитьроль "Богач" #ff0000`
 
+🎮 `!бакшот сумма` - Дуэль 1v1 (30м кд)
+🎰 `!казино сумма` - Классическое казино
+
 💰 Ваш баланс: {await get_balance(ctx.author.id)} кредитов
 """
     await ctx.send(shop_text)
@@ -503,19 +525,20 @@ async def help_command(ctx):
 🏆 `!топ` - Топ-10 игроков
 🛍 `!магазин` - Магазин
 🎨 `!купитьроль "Назв" #Цвет` - Купить роль
+🎮 `!бакшот сумма` - Дуэль 1v1 (30м кд) # NEW
 ➕ `!допкредит @юзер сумма` - Добавить кредиты (админ)
 ➖ `!минускредит @юзер сумма` - Снять кредиты (админ)
 🦹 `!ограбить @юзер` - Попытка кражи (1ч кд)
 🎰 `!везение сумма` - Игра в везение (1м кд)
 ℹ️ `!помощь` - Справка
 📢 `!ивент_старт` - Стартует ивент для фарма (админ)
-🎰 `!бакшот_хост сумма` - стартует игру "бакшот рулетку"
- `!бакшот_присоединиться` - присоеденение к раунду
+
 Примеры:
 `!купитьроль "Богач" #ff0000`
 `!везение 500`
+`!бакшот 1000` # NEW
 `!ограбить @Игрок`
-`!ивент_старт ивент_старт 2 2.5 фарм` (2 часа, x2.5 к фарму)
+`!ивент_старт 2 2.5 фарм` (2 часа, x2.5 к фарму)
 """
     await ctx.send(help_text)
 
