@@ -33,11 +33,27 @@ EVENT_ACTIVE = False
 EVENT_MULTIPLIER = 1.0
 EVENT_TYPE = None
 EVENT_END_TIME = 0
+active_duels = {}
 
 def is_admin(member: discord.Member) -> bool:
     """Проверяет, является ли пользователь администратором"""
     return any(role.name.lower() in ADMIN_ROLES for role in member.roles)
-
+# Система ивентов
+async def check_events():
+    while True:
+        global EVENT_ACTIVE
+        if EVENT_ACTIVE and time.time() > EVENT_END_TIME:
+            EVENT_ACTIVE = False
+            print("Ивент завершен")
+        await asyncio.sleep(60)
+        # Система дуэлей
+async def duel_timeout(channel):
+    await asyncio.sleep(120)
+    if channel.id in active_duels:
+        host_id = active_duels[channel.id]["host"]
+        update_balance(host_id, active_duels[channel.id]["bet"])
+        del active_duels[channel.id]
+        await channel.send("🕒 Время дуэли вышло!")
 # Проверка обязательных переменных
 if not TOKEN:
     print("❌ Ошибка: Не установлен DISCORD_TOKEN")
@@ -265,6 +281,73 @@ async def remove_credits(ctx, member: discord.Member, amount: int):
     
     await update_balance(member.id, -amount)
     await ctx.send(f"✅ Админ {ctx.author.mention} снял {amount} кредитов у {member.mention}")
+    # Дуэльная система
+@bot.command(name="бакшот_хост")
+@commands.cooldown(1, 300, commands.BucketType.user)
+async def host_duel(ctx, bet: int):
+    if bet < 100:
+        await ctx.send("❌ Минимальная ставка: 100 кредитов!")
+        return
+    
+    balance = get_balance(ctx.author.id)
+    if balance < bet:
+        await ctx.send("❌ Недостаточно средств!")
+        return
+
+    update_balance(ctx.author.id, -bet)
+    active_duels[ctx.channel.id] = {
+        "host": ctx.author.id,
+        "bet": bet,
+        "participant": None
+    }
+    
+    embed = discord.Embed(
+        title="💥 Дуэль создана!",
+        description=f"{ctx.author.mention} ставит {bet} кредитов!\n"
+                    f"Присоединяйся: `!бакшот_присоединиться`",
+        color=0xff0000
+    )
+    await ctx.send(embed=embed)
+    await duel_timeout(ctx.channel)
+
+@bot.command(name="бакшот_присоединиться")
+async def join_duel(ctx):
+    if ctx.channel.id not in active_duels:
+        await ctx.send("❌ Нет активных дуэлей!")
+        return
+        
+    duel = active_duels[ctx.channel.id]
+    if duel["participant"] or ctx.author.id == duel["host"]:
+        await ctx.send("❌ Невозможно присоединиться!")
+        return
+
+    if get_balance(ctx.author.id) < duel["bet"]:
+        await ctx.send(f"❌ Нужно {duel['bet']} кредитов!")
+        return
+
+    update_balance(ctx.author.id, -duel["bet"])
+    duel["participant"] = ctx.author.id
+    
+    # Анимация дуэли
+    msg = await ctx.send("🔫 Дуэль начинается... 3")
+    for i in range(2, 0, -1):
+        await asyncio.sleep(1)
+        await msg.edit(content=f"🔫 Дуэль начинается... {i}")
+    await asyncio.sleep(1)
+    
+    # Определение победителя
+    winner_id = random.choice([duel["host"], duel["participant"]])
+    update_balance(winner_id, duel["bet"]*2)
+    winner = await bot.fetch_user(winner_id)
+    
+    embed = discord.Embed(
+        title="🎉 Победитель дуэли!",
+        description=f"{winner.mention} забирает {duel['bet']*2} кредитов!",
+        color=0x00ff00
+    )
+    await ctx.send(embed=embed)
+    del active_duels[ctx.channel.id]
+
 
 @bot.command(name="ограбить")
 @commands.cooldown(rate=1, per=ROB_COOLDOWN, type=commands.BucketType.user)
