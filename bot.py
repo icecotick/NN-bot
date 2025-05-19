@@ -5,6 +5,7 @@ import random
 import os
 import asyncpg
 import sys
+import asyncio
 from typing import Optional
 
 # Настройки
@@ -69,7 +70,15 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Критическая ошибка при запуске бота: {e}")
         await bot.close()
-        sys.exit(1)
+
+async def close_db():
+    if hasattr(bot, 'db') and not bot.db.is_closed():
+        await bot.db.close()
+        print("✅ Соединение с базой данных закрыто")
+
+@bot.event
+async def on_disconnect():
+    await close_db()
 
 async def get_balance(user_id: int) -> int:
     async with bot.db.acquire() as conn:
@@ -202,13 +211,20 @@ async def help_command(ctx):
 """
     await ctx.send(help_text)
 
-if __name__ == "__main__":
+def run_bot():
     try:
-        bot.run(TOKEN)
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(bot.start(TOKEN))
     except discord.errors.LoginFailure:
         print("❌ Ошибка авторизации Discord. Проверьте токен.")
+    except KeyboardInterrupt:
+        print("\n🛑 Получен сигнал прерывания, завершаю работу...")
     except Exception as e:
         print(f"❌ Неожиданная ошибка: {e}")
     finally:
-        if hasattr(bot, 'db') and not bot.db.is_closed():
-            await bot.db.close()
+        if loop.is_running():
+            loop.run_until_complete(close_db())
+        loop.close()
+
+if __name__ == "__main__":
+    run_bot()
