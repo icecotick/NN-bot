@@ -33,6 +33,11 @@ EVENT_ACTIVE = False
 EVENT_MULTIPLIER = 1.0
 EVENT_TYPE = None
 EVENT_END_TIME = 0
+# Система рулетки
+active_duels: Dict[int, Dict] = {}  # {channel_id: duel_data}
+
+def is_admin(member: discord.Member) -> bool:
+    return any(role.name.lower() in ADMIN_ROLES for role in member.roles)
 
 def is_admin(member: discord.Member) -> bool:
     """Проверяет, является ли пользователь администратором"""
@@ -326,6 +331,170 @@ async def casino(ctx, amount: int):
         win = amount * result
         await update_balance(user.id, win)
         await ctx.send(f"🎰 {user.mention} ставит {amount} и выигрывает x{result}! 🎉 +{win} кредитов!")
+        @bot.command(name="дуэль")
+async def duel(ctx, bet: int):
+    """Создать дуэль 1v1 с указанной ставкой"""
+    user = ctx.author
+    user_id = user.id
+    channel_id = ctx.channel.id
+    
+    if bet <= 0:
+        await ctx.send("❌ Ставка должна быть положительной!")
+        return
+    
+    balance = await get_balance(user_id)
+    if balance < bet:
+        await ctx.send(f"❌ Недостаточно средств! Ваш баланс: {balance}")
+        return
+    
+    if channel_id in active_duels:
+        await ctx.send("❌ В этом канале уже есть активная дуэль!")
+        return
+    
+    active_duels[channel_id] = {
+        "host": user_id,
+        "bet": bet,
+        "participant": None,
+        "host_accepted": False,
+        "participant_accepted": False
+    }
+    
+    await ctx.send(
+        f"🎲 {user.mention} создал дуэль со ставкой {bet} кредитов!\n"
+        f"Чтобы присоединиться, напишите !присоединиться\n"
+        f"Для подтверждения ставки оба игрока должны написать !готов"
+    )
+
+@bot.command(name="присоединиться")
+async def join_duel(ctx):
+    """Присоединиться к активной дуэли"""
+    user = ctx.author
+    user_id = user.id
+    channel_id = ctx.channel.id
+    
+    if channel_id not in active_duels:
+        await ctx.send("❌ В этом канале нет активных дуэлей!")
+        return
+    
+    duel_data = active_duels[channel_id]
+    
+    if duel_data["participant"] is not None:
+        await ctx.send("❌ В этой дуэли уже есть участник!")
+        return
+    
+    if user_id == duel_data["host"]:
+        await ctx.send("❌ Нельзя присоединиться к своей же дуэли!")
+        return
+    
+    balance = await get_balance(user_id)
+    if balance < duel_data["bet"]:
+        await ctx.send(f"❌ Недостаточно средств! Нужно {duel_data['bet']} кредитов.")
+        return
+    
+    duel_data["participant"] = user_id
+    active_duels[channel_id] = duel_data
+    
+    await ctx.send(
+        f"🎲 {user.mention} присоединился к дуэли!\n"
+        f"Ставка: {duel_data['bet']} кредитов\n"
+        f"Оба игрока должны подтвердить участие командой !готов"
+    )
+
+@bot.command(name="готов")
+async def ready_duel(ctx):
+    """Подтвердить участие в дуэли"""
+    user = ctx.author
+    user_id = user.id
+    channel_id = ctx.channel.id
+    
+    if channel_id not in active_duels:
+        await ctx.send("❌ В этом канале нет активных дуэлей!")
+        return
+    
+    duel_data = active_duels[channel_id]
+    
+    if user_id not in [duel_data["host"], duel_data["participant"]]:
+        await ctx.send("❌ Вы не участник этой дуэли!")
+        return
+    
+    if user_id == duel_data["host"]:
+        if duel_data["host_accepted"]:
+            await ctx.send("❌ Вы уже подтвердили участие!")
+            return
+        duel_data["host_accepted"] = True
+    else:
+        if duel_data["participant_accepted"]:
+            await ctx.send("❌ Вы уже подтвердили участие!")
+            return
+        duel_data["participant_accepted"] = True
+    
+    active_duels[channel_id] = duel_data
+    
+    await ctx.send(f"✅ {user.mention} подтвердил участие!")
+    
+    # Проверяем, все ли подтвердили
+    if duel_data["host_accepted"] and duel_data["participant_accepted"]:
+        await start_duel(ctx, duel_data)
+
+async def start_duel(ctx, duel_data):
+    """Запускает дуэль после подтверждения"""
+    channel_id = ctx.channel.id
+    host_id = duel_data["host"]
+    participant_id = duel_data["participant"]
+    bet = duel_data["bet"]
+    
+    try:
+        host = await ctx.guild.fetch_member(host_id)
+        participant = await ctx.guild.fetch_member(participant_id)
+    except:
+        await ctx.send("❌ Ошибка при поиске участников!")
+        del active_duels[channel_id]
+        return
+    
+    # Снимаем ставки
+    await update_balance(host_id, -bet)
+    await update_balance(participant_id, -bet)
+    
+    # Определяем победителя (50/50)
+    winner_id = random.choice([host_id, participant_id])
+    loser_id = participant_id if winner_id == host_id else host_id
+    
+    # Награждаем победителя
+    total_prize = bet * 2
+    await update_balance(winner_id, total_prize)
+    
+    # Отправляем результат
+    winner = await ctx.guild.fetch_member(winner_id)
+    loser = await ctx.guild.fetch_member(loser_id)
+    
+    await ctx.send(
+        f"🎲 Результат дуэли! 🎲\n"
+        f"🔫 {winner.mention} выиграл {total_prize} кредитов!\n"
+        f"☠️ {loser.mention} проиграл {bet} кредитов\n"
+        f"💰 Общий банк: {total_prize} кредитов"
+    )
+    
+    # Удаляем дуэль
+    del active_duels[channel_id]
+
+@bot.command(name="отменить")
+async def cancel_duel(ctx):
+    """Отменить созданную дуэль"""
+    user = ctx.author
+    user_id = user.id
+    channel_id = ctx.channel.id
+    
+    if channel_id not in active_duels:
+        await ctx.send("❌ В этом канале нет активных дуэлей!")
+        return
+    
+    if active_duels[channel_id]["host"] != user_id:
+        await ctx.send("❌ Только создатель может отменить дуэль!")
+        return
+    
+    del active_duels[channel_id]
+    await ctx.send("✅ Дуэль отменена!")
+
         
 @bot.command(name="ивент_старт")
 @commands.has_permissions(administrator=True)
@@ -412,6 +581,11 @@ async def buy_role(ctx, role_name: str, role_color: str):
 async def help_command(ctx):
     help_text = f"""
 📜 **Команды бота:**
+🎲 Система дуэлей:
+!дуэль [ставка] - Создать дуэль
+!присоединиться - Присоединиться к дуэли
+!готов - Подтвердить участие
+!отменить - Отменить дуэль
 
 🔴 `!славанн` - Стать Патриотом (2ч кд)
 🌾 `!фарм` - Заработок (20м кд)
@@ -428,6 +602,7 @@ async def help_command(ctx):
 📢 `!ивент_старт` - Стартует ивент для фарма (админ)
 
 Примеры:
+`!дуэль 500`
 `!купитьроль "Богач" #ff0000`
 `!казино 500`
 `!ограбить @Игрок`
