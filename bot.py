@@ -180,7 +180,7 @@ async def farm(ctx):
         await ctx.send("⛔ Эта команда доступна только для Патриотов.")
         return
 
-    reward = random.randint(5, 15)
+    reward = random.randint(20, 50)
     await update_balance(user.id, reward)
     await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {await get_balance(user.id)})")
 
