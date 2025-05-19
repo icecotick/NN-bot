@@ -12,6 +12,7 @@ from typing import Optional
 TOKEN = os.getenv("DISCORD_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://postgres:KoiwhbfRHSNZZfrsDHRsniDsoRonHDPx@ballast.proxy.rlwy.net:53277/railway"
 ROLE_NAME = "Патриот"
+CUSTOM_ROLE_PRICE = 2000
 CRIT_CHANCE = 10
 SUCCESS_CHANCE = 40
 
@@ -55,12 +56,20 @@ async def on_ready():
     try:
         bot.db = await create_db_pool()
         
-        # Создание таблицы если не существует
+        # Создание таблиц если не существуют
         async with bot.db.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
                     balance INTEGER DEFAULT 0
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS custom_roles (
+                    user_id BIGINT PRIMARY KEY,
+                    role_id BIGINT,
+                    role_name TEXT,
+                    role_color TEXT
                 )
             """)
         
@@ -96,6 +105,22 @@ async def update_balance(user_id: int, amount: int):
             ON CONFLICT (user_id)
             DO UPDATE SET balance = users.balance + $2
         """, user_id, amount)
+
+async def get_custom_role(user_id: int):
+    async with bot.db.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM custom_roles WHERE user_id = $1",
+            user_id
+        )
+
+async def create_custom_role(user_id: int, role_id: int, role_name: str, role_color: str):
+    async with bot.db.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO custom_roles (user_id, role_id, role_name, role_color)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id)
+            DO UPDATE SET role_id = $2, role_name = $3, role_color = $4
+        """, user_id, role_id, role_name, role_color)
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -199,7 +224,7 @@ async def top(ctx):
 
 @bot.command(name="помощь")
 async def help_command(ctx):
-    help_text = """
+    help_text = f"""
 📜 **Команды бота:**
 
 🔴 `!славанн` — попытка стать Патриотом (2ч кд)
@@ -207,9 +232,72 @@ async def help_command(ctx):
 💰 `!баланс` — показать ваш баланс (5с кд)
 💸 `!перевести @юзер сумма` — перевод кредитов
 🏆 `!топ` — топ-10 по балансу (5с кд)
+🛍 `!магазин` — просмотреть доступные товары
+🎨 `!купитьроль "Название" #Цвет` — купить кастомную роль ({CUSTOM_ROLE_PRICE} кредитов)
 ℹ️ `!помощь` — это сообщение
+
+Пример покупки роли: `!купитьроль "Богач" #ff0000`
 """
     await ctx.send(help_text)
+
+@bot.command(name="магазин")
+async def shop(ctx):
+    shop_text = f"""
+🛍 **Магазин социального кредита:**
+
+🎨 `!купитьроль "Название" #Цвет` - Купить кастомную роль ({CUSTOM_ROLE_PRICE} кредитов)
+Пример: `!купитьроль "Богач" #ff0000`
+
+💰 Ваш баланс: {await get_balance(ctx.author.id)} кредитов
+"""
+    await ctx.send(shop_text)
+
+@bot.command(name="купитьроль")
+async def buy_role(ctx, role_name: str, role_color: str):
+    user = ctx.author
+    balance = await get_balance(user.id)
+    
+    if balance < CUSTOM_ROLE_PRICE:
+        await ctx.send(f"❌ Недостаточно средств! Нужно {CUSTOM_ROLE_PRICE} кредитов, у вас {balance}.")
+        return
+    
+    # Проверяем, есть ли уже кастомная роль у пользователя
+    existing_role = await get_custom_role(user.id)
+    if existing_role:
+        try:
+            old_role = ctx.guild.get_role(existing_role['role_id'])
+            if old_role:
+                await old_role.delete()
+        except:
+            pass
+    
+    # Создаем новую роль
+    try:
+        # Парсим цвет
+        color = discord.Color.from_str(role_color)
+        
+        # Создаем роль
+        new_role = await ctx.guild.create_role(
+            name=role_name,
+            color=color,
+            reason=f"Кастомная роль для {user.name}"
+        )
+        
+        # Даем роль пользователю
+        await user.add_roles(new_role)
+        
+        # Сохраняем в базу данных
+        await create_custom_role(user.id, new_role.id, role_name, role_color)
+        
+        # Списываем деньги
+        await update_balance(user.id, -CUSTOM_ROLE_PRICE)
+        
+        await ctx.send(f"✅ {user.mention}, вы успешно купили роль {new_role.mention} за {CUSTOM_ROLE_PRICE} кредитов!")
+    except ValueError:
+        await ctx.send("❌ Неверный формат цвета! Используйте HEX формат, например: `#ff0000`")
+    except Exception as e:
+        print(f"Ошибка при создании роли: {e}")
+        await ctx.send("❌ Произошла ошибка при создании роли. Попробуйте позже.")
 
 def run_bot():
     try:
