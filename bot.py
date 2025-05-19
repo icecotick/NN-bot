@@ -3,40 +3,14 @@ from discord.ext import commands
 from discord.ext.commands import CommandOnCooldown
 import random
 import os
-import sqlite3
-import time
-from contextlib import closing
+import asyncpg
 
-# Инициализация базы данных
-def init_db():
-    with closing(sqlite3.connect('economy.db')) as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS users
-                     (user_id INTEGER PRIMARY KEY, 
-                      balance INTEGER DEFAULT 0)''')
-        conn.commit()
-
-init_db()
-
-# Функции для работы с валютой
-def get_balance(user_id):
-    with closing(sqlite3.connect('economy.db')) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-        result = cursor.fetchone()
-        return result[0] if result else 0
-
-def update_balance(user_id, amount):
-    with closing(sqlite3.connect('economy.db')) as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,))
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
-        conn.commit()
-
-# Настройка бота
+# Настройки
 TOKEN = os.getenv("DISCORD_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 ROLE_NAME = "Патриот"
-CRIT_CHANCE = 10  # 5% шанс крита
-SUCCESS_CHANCE = 40  # 20% общий шанс успеха
+CRIT_CHANCE = 10
+SUCCESS_CHANCE = 40
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -44,7 +18,32 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Обработчик ошибок
+# Подключение к БД
+@bot.event
+async def on_ready():
+    bot.db = await asyncpg.create_pool(DATABASE_URL)
+    await bot.db.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            balance INTEGER DEFAULT 0
+        )
+    """)
+    print(f"✅ Бот запущен как {bot.user}")
+
+# Работа с базой
+async def get_balance(user_id):
+    result = await bot.db.fetchrow("SELECT balance FROM users WHERE user_id=$1", user_id)
+    return result["balance"] if result else 0
+
+async def update_balance(user_id, amount):
+    await bot.db.execute("""
+        INSERT INTO users (user_id, balance)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id)
+        DO UPDATE SET balance = users.balance + $2
+    """, user_id, amount)
+
+# Обработка ошибок
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, CommandOnCooldown):
@@ -55,10 +54,7 @@ async def on_command_error(ctx, error):
     else:
         raise error
 
-@bot.event
-async def on_ready():
-    print(f"✅ Бот запущен как {bot.user}")
-
+# Команда "славанн"
 @bot.command(name="славанн")
 @commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
 async def slav_party(ctx):
@@ -74,23 +70,24 @@ async def slav_party(ctx):
         return
 
     roll = random.randint(1, 100)
-    balance = get_balance(user.id)
+    balance = await get_balance(user.id)
 
     if roll <= CRIT_CHANCE:
         await user.add_roles(role)
-        update_balance(user.id, 1000)
-        await ctx.send(f'💥 **КРИТ!** {user.mention}, ты получил роль + 1000 социального рейтинга! (Баланс: {get_balance(user.id)})')
+        await update_balance(user.id, 1000)
+        await ctx.send(f'💥 **КРИТ!** {user.mention}, ты получил роль + 1000 социального рейтинга! (Баланс: {await get_balance(user.id)})')
 
     elif roll <= SUCCESS_CHANCE:
         await user.add_roles(role)
-        update_balance(user.id, 100)
-        await ctx.send(f'🟥 {user.mention}, ты получил роль + 100 рейтинга! (Баланс: {get_balance(user.id)})')
+        await update_balance(user.id, 100)
+        await ctx.send(f'🟥 {user.mention}, ты получил роль + 100 рейтинга! (Баланс: {await get_balance(user.id)})')
 
     else:
         penalty = min(10, balance)
-        update_balance(user.id, -penalty)
-        await ctx.send(f'🕊 {user.mention}, -{penalty} рейтинга. Попробуй ещё! (Баланс: {get_balance(user.id)})')
+        await update_balance(user.id, -penalty)
+        await ctx.send(f'🕊 {user.mention}, -{penalty} рейтинга. Попробуй ещё! (Баланс: {await get_balance(user.id)})')
 
+# Команда "фарм"
 @bot.command(name="фарм")
 @commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)
 async def farm(ctx):
@@ -101,53 +98,54 @@ async def farm(ctx):
         await ctx.send("⛔ Эта команда доступна только для Патриотов.")
         return
 
-    reward = random.randint(5, 15)
-    update_balance(user.id, reward)
-    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {get_balance(user.id)})")
+    reward = random.randint(10, 40)
+    await update_balance(user.id, reward)
+    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {await get_balance(user.id)})")
 
+# Команда "баланс"
 @bot.command(name="баланс")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
 async def balance(ctx):
-    balance = get_balance(ctx.author.id)
-    await ctx.send(f'💰 {ctx.author.mention}, ваш баланс: {balance}')
+    bal = await get_balance(ctx.author.id)
+    await ctx.send(f'💰 {ctx.author.mention}, ваш баланс: {bal}')
 
+# Команда "перевести"
 @bot.command(name="перевести")
 async def transfer(ctx, member: discord.Member, amount: int):
     if amount <= 0:
         await ctx.send("❌ Сумма должна быть положительной!")
         return
-    
-    sender_balance = get_balance(ctx.author.id)
+
+    sender_balance = await get_balance(ctx.author.id)
     if sender_balance < amount:
         await ctx.send("❌ Недостаточно средств!")
         return
 
-    update_balance(ctx.author.id, -amount)
-    update_balance(member.id, amount)
+    await update_balance(ctx.author.id, -amount)
+    await update_balance(member.id, amount)
     await ctx.send(f'✅ {ctx.author.mention} перевел {amount} рейтинга {member.mention}!')
 
+# Команда "топ"
 @bot.command(name="топ")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
 async def top(ctx):
-    with closing(sqlite3.connect('economy.db')) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10")
-        top_users = cursor.fetchall()
+    top_users = await bot.db.fetch("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10")
 
     if not top_users:
         await ctx.send("😔 Таблица пуста.")
         return
 
     leaderboard = []
-    for i, (user_id, balance) in enumerate(top_users, start=1):
+    for i, record in enumerate(top_users, start=1):
         try:
-            user = await bot.fetch_user(user_id)
-            leaderboard.append(f"{i}. {user.name} — {balance} кредитов")
+            user = await bot.fetch_user(record['user_id'])
+            leaderboard.append(f"{i}. {user.name} — {record['balance']} кредитов")
         except:
-            leaderboard.append(f"{i}. [Неизвестный пользователь] — {balance} кредитов")
+            leaderboard.append(f"{i}. [Неизвестный пользователь] — {record['balance']} кредитов")
 
-    await ctx.send(f"🏆 **Топ 10 Патриотов:**\n" + "\n".join(leaderboard))
+    await ctx.send("🏆 **Топ 10 Патриотов:**\n" + "\n".join(leaderboard))
 
+# Команда "помощь"
 @bot.command(name="помощь")
 async def help_command(ctx):
     help_text = """
