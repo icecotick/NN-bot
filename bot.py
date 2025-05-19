@@ -16,9 +16,16 @@ CUSTOM_ROLE_PRICE = 2000
 CRIT_CHANCE = 10
 SUCCESS_CHANCE = 40
 ADMIN_ROLES = ["создатель", "главный модер"]
-ROB_CHANCE = 25  # 25% шанс успешной кражи
-ROB_PERCENT = 20  # 20% от баланса
-ROB_COOLDOWN = 3600  # 1 час кулдауна в секундах
+ROB_CHANCE = 25  # Шанс успешной кражи
+ROB_PERCENT = 20  # Процент кражи/штрафа
+ROB_COOLDOWN = 3600  # 1 час кулдауна
+CASINO_COOLDOWN = 60  # 1 минута кулдауна
+CASINO_MULTIPLIERS = {
+    2: 35,  # x2 (35% шанс)
+    3: 10,  # x3 (10% шанс)
+    5: 2,   # x5 (2% шанс)
+    0: 53   # Проигрыш (53% шанс)
+}
 
 def is_admin(member: discord.Member) -> bool:
     """Проверяет, является ли пользователь администратором"""
@@ -47,11 +54,8 @@ async def create_db_pool():
             min_size=1,
             max_size=5,
             command_timeout=10,
-            server_settings={
-                'application_name': 'discord-bot'
-            }
+            server_settings={'application_name': 'discord-bot'}
         )
-        # Проверка соединения
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
         return pool
@@ -64,7 +68,6 @@ async def on_ready():
     try:
         bot.db = await create_db_pool()
         
-        # Создание таблиц если не существуют
         async with bot.db.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -99,10 +102,7 @@ async def on_disconnect():
 
 async def get_balance(user_id: int) -> int:
     async with bot.db.acquire() as conn:
-        result = await conn.fetchrow(
-            "SELECT balance FROM users WHERE user_id = $1", 
-            user_id
-        )
+        result = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1", user_id)
         return result["balance"] if result else 0
 
 async def update_balance(user_id: int, amount: int):
@@ -116,10 +116,7 @@ async def update_balance(user_id: int, amount: int):
 
 async def get_custom_role(user_id: int):
     async with bot.db.acquire() as conn:
-        return await conn.fetchrow(
-            "SELECT * FROM custom_roles WHERE user_id = $1",
-            user_id
-        )
+        return await conn.fetchrow("SELECT * FROM custom_roles WHERE user_id = $1", user_id)
 
 async def create_custom_role(user_id: int, role_id: int, role_name: str, role_color: str):
     async with bot.db.acquire() as conn:
@@ -136,7 +133,7 @@ async def on_command_error(ctx, error):
         seconds = int(error.retry_after)
         minutes = seconds // 60
         seconds = seconds % 60
-        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с, прежде чем использовать эту команду снова.")
+        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед повторным использованием!")
     else:
         print(f"⚠ Ошибка команды: {error}")
         await ctx.send("❌ Произошла ошибка при выполнении команды")
@@ -161,17 +158,15 @@ async def slav_party(ctx):
     if roll <= CRIT_CHANCE:
         await user.add_roles(role)
         await update_balance(user.id, 1000)
-        await ctx.send(f'💥 **КРИТ!** {user.mention}, ты получил роль + 1000 социального рейтинга! (Баланс: {await get_balance(user.id)})')
-
+        await ctx.send(f'💥 **КРИТ!** {user.mention}, ты получил роль + 1000 кредитов! (Баланс: {await get_balance(user.id)})')
     elif roll <= SUCCESS_CHANCE:
         await user.add_roles(role)
         await update_balance(user.id, 100)
-        await ctx.send(f'🟥 {user.mention}, ты получил роль + 100 рейтинга! (Баланс: {await get_balance(user.id)})')
-
+        await ctx.send(f'🟥 {user.mention}, ты получил роль + 100 кредитов! (Баланс: {await get_balance(user.id)})')
     else:
         penalty = min(10, balance)
         await update_balance(user.id, -penalty)
-        await ctx.send(f'🕊 {user.mention}, -{penalty} рейтинга. Попробуй ещё! (Баланс: {await get_balance(user.id)})')
+        await ctx.send(f'🕊 {user.mention}, -{penalty} кредитов. Попробуй ещё! (Баланс: {await get_balance(user.id)})')
 
 @bot.command(name="фарм")
 @commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)
@@ -180,18 +175,18 @@ async def farm(ctx):
     role = discord.utils.get(ctx.guild.roles, name=ROLE_NAME)
 
     if not role or role not in user.roles:
-        await ctx.send("⛔ Эта команда доступна только для Патриотов.")
+        await ctx.send("⛔ Только для Патриотов!")
         return
 
     reward = random.randint(5, 15)
     await update_balance(user.id, reward)
-    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {await get_balance(user.id)})")
+    await ctx.send(f"🌾 {user.mention}, вы заработали {reward} кредитов! (Баланс: {await get_balance(user.id)})")
 
 @bot.command(name="баланс")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
 async def balance(ctx):
     bal = await get_balance(ctx.author.id)
-    await ctx.send(f'💰 {ctx.author.mention}, ваш баланс: {bal}')
+    await ctx.send(f'💰 Ваш баланс: {bal} кредитов')
 
 @bot.command(name="перевести")
 async def transfer(ctx, member: discord.Member, amount: int):
@@ -206,15 +201,13 @@ async def transfer(ctx, member: discord.Member, amount: int):
 
     await update_balance(ctx.author.id, -amount)
     await update_balance(member.id, amount)
-    await ctx.send(f'✅ {ctx.author.mention} перевел {amount} рейтинга {member.mention}!')
+    await ctx.send(f'✅ {ctx.author.mention} перевел {amount} кредитов {member.mention}!')
 
 @bot.command(name="топ")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
 async def top(ctx):
     async with bot.db.acquire() as conn:
-        top_users = await conn.fetch(
-            "SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10"
-        )
+        top_users = await conn.fetch("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10")
 
     if not top_users:
         await ctx.send("😔 Таблица пуста.")
@@ -226,15 +219,14 @@ async def top(ctx):
             user = await bot.fetch_user(record['user_id'])
             leaderboard.append(f"{i}. {user.name} — {record['balance']} кредитов")
         except:
-            leaderboard.append(f"{i}. [Неизвестный пользователь] — {record['balance']} кредитов")
+            leaderboard.append(f"{i}. [Неизвестный] — {record['balance']} кредитов")
 
-    await ctx.send("🏆 **Топ 10 Патриотов:**\n" + "\n".join(leaderboard))
+    await ctx.send("🏆 **Топ 10:**\n" + "\n".join(leaderboard))
 
 @bot.command(name="допкредит")
 async def add_credits(ctx, member: discord.Member, amount: int):
-    """Добавляет кредиты указанному пользователю (только для админов)"""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Эта команда доступна только для администраторов!")
+        await ctx.send("❌ Только для администраторов!")
         return
     
     if amount <= 0:
@@ -242,15 +234,12 @@ async def add_credits(ctx, member: discord.Member, amount: int):
         return
     
     await update_balance(member.id, amount)
-    new_balance = await get_balance(member.id)
-    await ctx.send(f"✅ Администратор {ctx.author.mention} добавил {amount} кредитов пользователю {member.mention}\n"
-                   f"💰 Новый баланс: {new_balance} кредитов")
+    await ctx.send(f"✅ Админ {ctx.author.mention} добавил {amount} кредитов {member.mention}")
 
 @bot.command(name="минускредит")
 async def remove_credits(ctx, member: discord.Member, amount: int):
-    """Удаляет кредиты у указанного пользователя (только для админов)"""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Эта команда доступна только для администраторов!")
+        await ctx.send("❌ Только для администраторов!")
         return
     
     if amount <= 0:
@@ -259,91 +248,79 @@ async def remove_credits(ctx, member: discord.Member, amount: int):
     
     current_balance = await get_balance(member.id)
     if current_balance < amount:
-        await ctx.send(f"❌ У пользователя только {current_balance} кредитов, нельзя снять {amount}!")
+        await ctx.send(f"❌ У пользователя только {current_balance} кредитов!")
         return
     
     await update_balance(member.id, -amount)
-    new_balance = await get_balance(member.id)
-    await ctx.send(f"✅ Администратор {ctx.author.mention} снял {amount} кредитов у пользователя {member.mention}\n"
-                   f"💰 Новый баланс: {new_balance} кредитов")
+    await ctx.send(f"✅ Админ {ctx.author.mention} снял {amount} кредитов у {member.mention}")
 
 @bot.command(name="ограбить")
 @commands.cooldown(rate=1, per=ROB_COOLDOWN, type=commands.BucketType.user)
 async def rob(ctx, member: discord.Member):
-    """Попытаться ограбить пользователя (25% шанс успеха)"""
     thief = ctx.author
     victim = member
     
-    # Нельзя грабить самого себя
     if thief == victim:
-        await ctx.send("❌ Нельзя грабить самого себя!")
+        await ctx.send("❌ Нельзя грабить себя!")
         return
     
-    # Получаем балансы
     thief_balance = await get_balance(thief.id)
     victim_balance = await get_balance(victim.id)
     
-    # Проверка минимального баланса жертвы
     if victim_balance < 10:
-        await ctx.send(f"❌ У {victim.mention} слишком мало кредитов для кражи!")
+        await ctx.send(f"❌ У {victim.mention} слишком мало кредитов!")
         return
     
-    # Вычисляем сумму кражи (20% от баланса жертвы)
     steal_amount = max(1, int(victim_balance * (ROB_PERCENT / 100)))
     
-    # 25% шанс успеха
     if random.randint(1, 100) <= ROB_CHANCE:
-        # Успешная кража
         await update_balance(victim.id, -steal_amount)
         await update_balance(thief.id, steal_amount)
-        
         await ctx.send(
-            f"💰 {thief.mention} успешно ограбил {victim.mention} и украл {steal_amount} кредитов!\n"
-            f"💸 Новый баланс грабителя: {await get_balance(thief.id)}\n"
-            f"💸 Новый баланс жертвы: {await get_balance(victim.id)}"
+            f"💰 {thief.mention} ограбил {victim.mention} и украл {steal_amount} кредитов!\n"
+            f"💸 Новый баланс: {await get_balance(thief.id)}"
         )
     else:
-        # Неудачная кража - штраф 20% от баланса грабителя
-        penalty_amount = max(1, int(thief_balance * (ROB_PERCENT / 100)))
-        await update_balance(thief.id, -penalty_amount)
-        
+        penalty = max(1, int(thief_balance * (ROB_PERCENT / 100)))
+        await update_balance(thief.id, -penalty)
         await ctx.send(
-            f"🚨 {thief.mention} попытался ограбить {victim.mention}, но был пойман!\n"
-            f"💸 С грабителя снято {penalty_amount} кредитов в качестве штрафа!\n"
-            f"💰 Новый баланс грабителя: {await get_balance(thief.id)}"
+            f"🚨 {thief.mention} попался при попытке ограбить {victim.mention}!\n"
+            f"💸 Штраф: {penalty} кредитов\n"
+            f"💰 Новый баланс: {await get_balance(thief.id)}"
         )
 
-@bot.command(name="помощь")
-async def help_command(ctx):
-    help_text = f"""
-📜 **Команды бота:**
-
-🔴 `!славанн` — попытка стать Патриотом (2ч кд)
-🌾 `!фарм` — заработать кредиты (20м кд, только для Патриотов)
-💰 `!баланс` — показать ваш баланс (5с кд)
-💸 `!перевести @юзер сумма` — перевод кредитов
-🏆 `!топ` — топ-10 по балансу (5с кд)
-🛍 `!магазин` — просмотреть доступные товары
-🎨 `!купитьроль "Название" #Цвет` — купить кастомную роль ({CUSTOM_ROLE_PRICE} кредитов)
-➕ `!допкредит @юзер сумма` — добавить кредиты (только для админов)
-➖ `!минускредит @юзер сумма` — снять кредиты (только для админов)
-🦹 `!ограбить @юзер` — попытаться ограбить (25% шанс, 1ч кд)
-ℹ️ `!помощь` — это сообщение
-
-Примеры:
-`!купитьроль "Богач" #ff0000`
-`!допкредит @Пользователь 500`
-`!минускредит @Пользователь 200`
-`!ограбить @Игрок`
-"""
-    await ctx.send(help_text)
+@bot.command(name="казино")
+@commands.cooldown(rate=1, per=CASINO_COOLDOWN, type=commands.BucketType.user)
+async def casino(ctx, amount: int):
+    user = ctx.author
+    balance = await get_balance(user.id)
+    
+    if amount <= 0:
+        await ctx.send("❌ Ставка должна быть положительной!")
+        return
+    
+    if balance < amount:
+        await ctx.send(f"❌ Недостаточно средств! Ваш баланс: {balance}")
+        return
+    
+    multipliers = list(CASINO_MULTIPLIERS.keys())
+    weights = list(CASINO_MULTIPLIERS.values())
+    result = random.choices(multipliers, weights=weights, k=1)[0]
+    
+    if result == 0:
+        await update_balance(user.id, -amount)
+        await ctx.send(f"🎰 {user.mention} ставит {amount} и... проигрывает! 💸")
+    else:
+        win = amount * result
+        await update_balance(user.id, win)
+        await ctx.send(f"🎰 {user.mention} ставит {amount} и выигрывает x{result}! 🎉 +{win} кредитов!")
 
 @bot.command(name="магазин")
 async def shop(ctx):
     shop_text = f"""
-🛍 **Магазин социального кредита:**
+🛍 **Магазин:**
 
-🎨 `!купитьроль "Название" #Цвет` - Купить кастомную роль ({CUSTOM_ROLE_PRICE} кредитов)
+🎨 `!купитьроль "Название" #Цвет` - Кастомная роль ({CUSTOM_ROLE_PRICE} кредитов)
 Пример: `!купитьроль "Богач" #ff0000`
 
 💰 Ваш баланс: {await get_balance(ctx.author.id)} кредитов
@@ -356,10 +333,9 @@ async def buy_role(ctx, role_name: str, role_color: str):
     balance = await get_balance(user.id)
     
     if balance < CUSTOM_ROLE_PRICE:
-        await ctx.send(f"❌ Недостаточно средств! Нужно {CUSTOM_ROLE_PRICE} кредитов, у вас {balance}.")
+        await ctx.send(f"❌ Недостаточно средств! Нужно {CUSTOM_ROLE_PRICE} кредитов.")
         return
     
-    # Проверяем, есть ли уже кастомная роль у пользователя
     existing_role = await get_custom_role(user.id)
     if existing_role:
         try:
@@ -369,44 +345,54 @@ async def buy_role(ctx, role_name: str, role_color: str):
         except:
             pass
     
-    # Создаем новую роль
     try:
-        # Парсим цвет
         color = discord.Color.from_str(role_color)
-        
-        # Создаем роль
         new_role = await ctx.guild.create_role(
             name=role_name,
             color=color,
             reason=f"Кастомная роль для {user.name}"
         )
-        
-        # Даем роль пользователю
         await user.add_roles(new_role)
-        
-        # Сохраняем в базу данных
         await create_custom_role(user.id, new_role.id, role_name, role_color)
-        
-        # Списываем деньги
         await update_balance(user.id, -CUSTOM_ROLE_PRICE)
-        
-        await ctx.send(f"✅ {user.mention}, вы успешно купили роль {new_role.mention} за {CUSTOM_ROLE_PRICE} кредитов!")
+        await ctx.send(f"✅ {user.mention}, вы купили роль {new_role.mention}!")
     except ValueError:
-        await ctx.send("❌ Неверный формат цвета! Используйте HEX формат, например: `#ff0000`")
+        await ctx.send("❌ Неверный формат цвета! Пример: `#ff0000`")
     except Exception as e:
-        print(f"Ошибка при создании роли: {e}")
-        await ctx.send("❌ Произошла ошибка при создании роли. Попробуйте позже.")
+        print(f"Ошибка: {e}")
+        await ctx.send("❌ Ошибка при создании роли!")
+
+@bot.command(name="помощь")
+async def help_command(ctx):
+    help_text = f"""
+📜 **Команды бота:**
+
+🔴 `!славанн` - Стать Патриотом (2ч кд)
+🌾 `!фарм` - Заработок (20м кд)
+💰 `!баланс` - Ваш баланс
+💸 `!перевести @юзер сумма` - Перевод
+🏆 `!топ` - Топ-10 игроков
+🛍 `!магазин` - Магазин
+🎨 `!купитьроль "Назв" #Цвет` - Купить роль
+➕ `!допкредит @юзер сумма` - Добавить кредиты (админ)
+➖ `!минускредит @юзер сумма` - Снять кредиты (админ)
+🦹 `!ограбить @юзер` - Попытка кражи (1ч кд)
+🎰 `!казино сумма` - Игра в казино (1м кд)
+ℹ️ `!помощь` - Справка
+
+Примеры:
+`!купитьроль "Богач" #ff0000`
+`!казино 500`
+`!ограбить @Игрок`
+"""
+    await ctx.send(help_text)
 
 def run_bot():
     try:
         loop = asyncio.get_event_loop()
         loop.run_until_complete(bot.start(TOKEN))
-    except discord.errors.LoginFailure:
-        print("❌ Ошибка авторизации Discord. Проверьте токен.")
-    except KeyboardInterrupt:
-        print("\n🛑 Получен сигнал прерывания, завершаю работу...")
     except Exception as e:
-        print(f"❌ Неожиданная ошибка: {e}")
+        print(f"❌ Ошибка: {e}")
     finally:
         if loop.is_running():
             loop.run_until_complete(close_db())
