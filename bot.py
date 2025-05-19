@@ -4,13 +4,24 @@ from discord.ext.commands import CommandOnCooldown
 import random
 import os
 import asyncpg
+import sys
+from typing import Optional
 
 # Настройки
 TOKEN = os.getenv("DISCORD_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://postgres:KoiwhbfRHSNZZfrsDHRsniDsoRonHDPx@ballast.proxy.rlwy.net:53277/railway"
 ROLE_NAME = "Патриот"
 CRIT_CHANCE = 10
 SUCCESS_CHANCE = 40
+
+# Проверка обязательных переменных
+if not TOKEN:
+    print("❌ Ошибка: Не установлен DISCORD_TOKEN")
+    sys.exit(1)
+
+if not DATABASE_URL:
+    print("❌ Ошибка: Не установлен DATABASE_URL")
+    sys.exit(1)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -18,32 +29,65 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Подключение к БД
+async def create_db_pool():
+    try:
+        print("⌛ Подключаюсь к базе данных...")
+        pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=5,
+            command_timeout=10,
+            server_settings={
+                'application_name': 'discord-bot'
+            }
+        )
+        # Проверка соединения
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        return pool
+    except Exception as e:
+        print(f"❌ Ошибка подключения к базе данных: {e}")
+        sys.exit(1)
+
 @bot.event
 async def on_ready():
-    bot.db = await asyncpg.create_pool(DATABASE_URL)
-    await bot.db.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            balance INTEGER DEFAULT 0
+    try:
+        bot.db = await create_db_pool()
+        
+        # Создание таблицы если не существует
+        async with bot.db.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    balance INTEGER DEFAULT 0
+                )
+            """)
+        
+        print(f"✅ Бот запущен как {bot.user}")
+        print(f"✅ Успешное подключение к базе данных")
+        
+    except Exception as e:
+        print(f"❌ Критическая ошибка при запуске бота: {e}")
+        await bot.close()
+        sys.exit(1)
+
+async def get_balance(user_id: int) -> int:
+    async with bot.db.acquire() as conn:
+        result = await conn.fetchrow(
+            "SELECT balance FROM users WHERE user_id = $1", 
+            user_id
         )
-    """)
-    print(f"✅ Бот запущен как {bot.user}")
+        return result["balance"] if result else 0
 
-# Работа с базой
-async def get_balance(user_id):
-    result = await bot.db.fetchrow("SELECT balance FROM users WHERE user_id=$1", user_id)
-    return result["balance"] if result else 0
+async def update_balance(user_id: int, amount: int):
+    async with bot.db.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users (user_id, balance)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET balance = users.balance + $2
+        """, user_id, amount)
 
-async def update_balance(user_id, amount):
-    await bot.db.execute("""
-        INSERT INTO users (user_id, balance)
-        VALUES ($1, $2)
-        ON CONFLICT (user_id)
-        DO UPDATE SET balance = users.balance + $2
-    """, user_id, amount)
-
-# Обработка ошибок
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, CommandOnCooldown):
@@ -52,9 +96,9 @@ async def on_command_error(ctx, error):
         seconds = seconds % 60
         await ctx.send(f"⏳ Подождите {minutes}м {seconds}с, прежде чем использовать эту команду снова.")
     else:
-        raise error
+        print(f"⚠ Ошибка команды: {error}")
+        await ctx.send("❌ Произошла ошибка при выполнении команды")
 
-# Команда "славанн"
 @bot.command(name="славанн")
 @commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
 async def slav_party(ctx):
@@ -87,7 +131,6 @@ async def slav_party(ctx):
         await update_balance(user.id, -penalty)
         await ctx.send(f'🕊 {user.mention}, -{penalty} рейтинга. Попробуй ещё! (Баланс: {await get_balance(user.id)})')
 
-# Команда "фарм"
 @bot.command(name="фарм")
 @commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)
 async def farm(ctx):
@@ -98,18 +141,16 @@ async def farm(ctx):
         await ctx.send("⛔ Эта команда доступна только для Патриотов.")
         return
 
-    reward = random.randint(10, 40)
+    reward = random.randint(5, 15)
     await update_balance(user.id, reward)
     await ctx.send(f"🌾 {user.mention}, вы заработали {reward} соц. кредитов! (Баланс: {await get_balance(user.id)})")
 
-# Команда "баланс"
 @bot.command(name="баланс")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
 async def balance(ctx):
     bal = await get_balance(ctx.author.id)
     await ctx.send(f'💰 {ctx.author.mention}, ваш баланс: {bal}')
 
-# Команда "перевести"
 @bot.command(name="перевести")
 async def transfer(ctx, member: discord.Member, amount: int):
     if amount <= 0:
@@ -125,11 +166,13 @@ async def transfer(ctx, member: discord.Member, amount: int):
     await update_balance(member.id, amount)
     await ctx.send(f'✅ {ctx.author.mention} перевел {amount} рейтинга {member.mention}!')
 
-# Команда "топ"
 @bot.command(name="топ")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
 async def top(ctx):
-    top_users = await bot.db.fetch("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10")
+    async with bot.db.acquire() as conn:
+        top_users = await conn.fetch(
+            "SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10"
+        )
 
     if not top_users:
         await ctx.send("😔 Таблица пуста.")
@@ -145,7 +188,6 @@ async def top(ctx):
 
     await ctx.send("🏆 **Топ 10 Патриотов:**\n" + "\n".join(leaderboard))
 
-# Команда "помощь"
 @bot.command(name="помощь")
 async def help_command(ctx):
     help_text = """
@@ -160,4 +202,13 @@ async def help_command(ctx):
 """
     await ctx.send(help_text)
 
-bot.run(TOKEN)
+if __name__ == "__main__":
+    try:
+        bot.run(TOKEN)
+    except discord.errors.LoginFailure:
+        print("❌ Ошибка авторизации Discord. Проверьте токен.")
+    except Exception as e:
+        print(f"❌ Неожиданная ошибка: {e}")
+    finally:
+        if hasattr(bot, 'db') and not bot.db.is_closed():
+            await bot.db.close()
