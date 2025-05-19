@@ -331,6 +331,7 @@ async def casino(ctx, amount: int):
         win = amount * result
         await update_balance(user.id, win)
         await ctx.send(f"🎰 {user.mention} ставит {amount} и выигрывает x{result}! 🎉 +{win} кредитов!")
+        
         @bot.command(name="дуэль")
 async def duel(ctx, bet: int):
     """Создать дуэль 1v1 с указанной ставкой"""
