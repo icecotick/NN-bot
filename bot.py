@@ -7,7 +7,6 @@ import asyncpg
 import sys
 import asyncio
 import time
-from typing import Optional
 from datetime import datetime
 
 # Настройки
@@ -70,7 +69,6 @@ async def create_db_pool():
         )
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
-            # Создаем таблицу профилей, если ее нет
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS profiles (
                     user_id BIGINT PRIMARY KEY,
@@ -90,7 +88,6 @@ async def create_db_pool():
 async def on_ready():
     try:
         bot.db = await create_db_pool()
-        
         async with bot.db.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -106,13 +103,27 @@ async def on_ready():
                     role_color TEXT
                 )
             """)
-        
         print(f"✅ Бот запущен как {bot.user}")
-        print(f"✅ Успешное подключение к базе данных")
-        
     except Exception as e:
         print(f"❌ Критическая ошибка при запуске бота: {e}")
         await bot.close()
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, CommandOnCooldown):
+        seconds = int(error.retry_after)
+        minutes = seconds // 60
+        seconds = seconds % 60
+        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед повторным использованием!")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Не хватает аргумента: {error.param.name}")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Неверный тип аргумента!")
+    elif isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ У вас нет прав для этой команды!")
+    else:
+        print(f"⚠ Необработанная ошибка: {type(error)} - {error}")
+        await ctx.send("❌ Произошла неизвестная ошибка при выполнении команды")
 
 async def close_db():
     if hasattr(bot, 'db') and not bot.db.is_closed():
@@ -154,7 +165,6 @@ async def get_profile(user_id: int):
     async with bot.db.acquire() as conn:
         profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
         if not profile:
-            # Создаем новый профиль, если его нет
             await conn.execute("INSERT INTO profiles (user_id) VALUES ($1)", user_id)
             profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
         return profile
@@ -174,14 +184,80 @@ async def add_xp(user_id: int, xp_amount: int):
     new_xp = profile['xp'] + xp_amount
     new_level = profile['level']
     
-    # Проверяем повышение уровня (100 XP за уровень)
     if new_xp >= new_level * 100:
         new_level += 1
         new_xp = 0
     
     await update_profile(user_id, xp=new_xp, level=new_level)
-    return new_level > profile['level']  # Возвращаем True, если уровень повысился
+    return new_level > profile['level']
 
+@bot.command(name="фарм")
+@commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)
+async def farm(ctx):
+    """Заработать кредиты (только для Патриотов)"""
+    # Проверка роли
+    if not discord.utils.get(ctx.author.roles, name=ROLE_NAME):
+        await ctx.send("⛔ Только для Патриотов!")
+        return
+
+    # Расчет награды
+    base_reward = random.randint(20, 50)
+    if EVENT_ACTIVE and EVENT_TYPE == "фарм":
+        reward = int(base_reward * EVENT_MULTIPLIER)
+        event_bonus = f" (Ивент x{EVENT_MULTIPLIER})"
+    else:
+        reward = base_reward
+        event_bonus = ""
+
+    # Начисление
+    level_up = await add_xp(ctx.author.id, 5)
+    await update_balance(ctx.author.id, reward)
+
+    # Формирование ответа
+    msg = f"🌾 {ctx.author.mention}, вы получили {reward} кредитов и 5 опыта{event_bonus}!"
+    if level_up:
+        profile = await get_profile(ctx.author.id)
+        msg += f"\n🎉 Поздравляем! Новый уровень: {profile['level']}"
+    
+    await ctx.send(msg)
+
+@bot.command(name="ивент_старт")
+@commands.has_permissions(administrator=True)
+async def start_event(ctx, hours: int, multiplier: float, event_type: str = "фарм"):
+    """Запустить ивент (админ)"""
+    global EVENT_ACTIVE, EVENT_MULTIPLIER, EVENT_TYPE, EVENT_END_TIME
+    
+    EVENT_ACTIVE = True
+    EVENT_MULTIPLIER = multiplier
+    EVENT_TYPE = event_type.lower()
+    EVENT_END_TIME = time.time() + hours * 3600
+    
+    embed = discord.Embed(
+        title="🎊 ИВЕНТ АКТИВИРОВАН!",
+        description=f"**Тип:** {event_type.upper()}\n**Множитель:** x{multiplier}\n**Длительность:** {hours} ч.",
+        color=0x00ff00
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="ивент_статус")
+async def event_status(ctx):
+    """Проверить текущий ивент"""
+    if EVENT_ACTIVE:
+        remaining = int((EVENT_END_TIME - time.time()) // 60)
+        embed = discord.Embed(
+            title="📢 Активный ивент",
+            description=f"**Тип:** {EVENT_TYPE}\n**Множитель:** x{EVENT_MULTIPLIER}\n**Осталось:** {remaining} мин",
+            color=0x00ff00
+        )
+    else:
+        embed = discord.Embed(
+            title="ℹ️ Ивентов нет",
+            description="Админы могут запустить командой `!ивент_старт`",
+            color=0xff0000
+        )
+    await ctx.send(embed=embed)
+
+# ... (остальные команды остаются без изменений) ...
 @bot.command(name="профиль")
 async def profile(ctx, member: discord.Member = None):
     """Показывает профиль пользователя"""
@@ -525,90 +601,6 @@ async def casino(ctx, amount: int):
         win = amount * result
         await update_balance(user.id, win)
         await ctx.send(f"🎰 {user.mention} ставит {amount} и выигрывает x{result}! 🎉 +{win} кредитов!")
-        
-@bot.command(name="ивент_старт")
-@commands.has_permissions(administrator=True)
-async def start_event(ctx, hours: int, multiplier: float, event_type: str = "фарм"):
-    global EVENT_ACTIVE, EVENT_MULTIPLIER, EVENT_TYPE, EVENT_END_TIME
-    
-    EVENT_ACTIVE = True
-    EVENT_MULTIPLIER = multiplier
-    EVENT_TYPE = event_type.lower()
-    EVENT_END_TIME = time.time() + hours * 3600
-    
-    embed = discord.Embed(
-        title="🎊 ИВЕНТ АКТИВИРОВАН!",
-        description=f"**{event_type.upper()}** дает x{multiplier} награды!\nДействует {hours} часов.",
-        color=0xffd700
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="ивент_статус")
-async def event_status(ctx):
-    if EVENT_ACTIVE:
-        remaining = int((EVENT_END_TIME - time.time()) // 60)
-        embed = discord.Embed(
-            title="📢 Активный ивент",
-            description=f"**Тип:** {EVENT_TYPE}\n**Множитель:** x{EVENT_MULTIPLIER}\n**Осталось:** {remaining} минут",
-            color=0x00ff00
-        )
-    else:
-        embed = discord.Embed(
-            title="ℹ️ Ивентов нет",
-            description="Админы могут запустить командой `!ивент_старт`",
-            color=0xff0000
-        )
-    await ctx.send(embed=embed)
-    
-@bot.command(name="магазин")
-async def shop(ctx):
-    shop_text = f"""
-🛍 **Магазин:**
-
-🎨 `!купитьроль "Название" #Цвет` - Кастомная роль ({CUSTOM_ROLE_PRICE} кредитов)
-Пример: `!купитьроль "Богач" #ff0000`
-
-🎮 `!бакшот сумма` - Дуэль 1v1 (30м кд)
-🎰 `!везение сумма` - Классическое казино
-
-💰 Ваш баланс: {await get_balance(ctx.author.id)} кредитов
-"""
-    await ctx.send(shop_text)
-
-@bot.command(name="купитьроль")
-async def buy_role(ctx, role_name: str, role_color: str):
-    user = ctx.author
-    balance = await get_balance(user.id)
-    
-    if balance < CUSTOM_ROLE_PRICE:
-        await ctx.send(f"❌ Недостаточно средств! Нужно {CUSTOM_ROLE_PRICE} кредитов.")
-        return
-    
-    existing_role = await get_custom_role(user.id)
-    if existing_role:
-        try:
-            old_role = ctx.guild.get_role(existing_role['role_id'])
-            if old_role:
-                await old_role.delete()
-        except:
-            pass
-    
-    try:
-        color = discord.Color.from_str(role_color)
-        new_role = await ctx.guild.create_role(
-            name=role_name,
-            color=color,
-            reason=f"Кастомная роль для {user.name}"
-        )
-        await user.add_roles(new_role)
-        await create_custom_role(user.id, new_role.id, role_name, role_color)
-        await update_balance(user.id, -CUSTOM_ROLE_PRICE)
-        await ctx.send(f"✅ {user.mention}, вы купили роль {new_role.mention}!")
-    except ValueError:
-        await ctx.send("❌ Неверный формат цвета! Пример: `#ff0000`")
-    except Exception as e:
-        print(f"Ошибка: {e}")
-        await ctx.send("❌ Ошибка при создании роли!")
 
 @bot.command(name="помощь")
 async def help_command(ctx):
