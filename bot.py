@@ -6,13 +6,13 @@ import os
 import asyncpg
 import sys
 import asyncio
-import discord.ui
 import time
-from datetime import datetime
+from typing import Optional
+from datetime import datetime, timedelta
 
 # Настройки
 TOKEN = os.getenv("DISCORD_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://postgres:KoiwhbfRHSNZZfrsDHRsniDsoRonHDPx@ballast.proxy.rlwy.net:53277/railway"
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://postgres:пароль@сервер:порт/база"
 ROLE_NAME = "Патриот"
 CUSTOM_ROLE_PRICE = 2000
 CRIT_CHANCE = 10
@@ -30,33 +30,40 @@ CASINO_MULTIPLIERS = {
     0: 53
 }
 
-# Константы для ивентов
+# Глобальные переменные
 EVENT_ACTIVE = False
 EVENT_MULTIPLIER = 1.0
 EVENT_TYPE = None
 EVENT_END_TIME = 0
-
-# Глобальные переменные для бакшота
 active_buckshots = {}
-BUCKSHOT_GIF = "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExb21peDBuYWEzazhhb2EweWhzazd3NjkydnZ0dHI5M2x6b3d5aHdtdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/DQb9xdHQwFl9fvJ1ls/giphy.gif"
-
-def is_admin(member: discord.Member) -> bool:
-    return any(role.name.lower() in ADMIN_ROLES for role in member.roles)
-
-# Проверка обязательных переменных
-if not TOKEN:
-    print("❌ Ошибка: Не установлен DISCORD_TOKEN")
-    sys.exit(1)
-
-if not DATABASE_URL:
-    print("❌ Ошибка: Не установлен DATABASE_URL")
-    sys.exit(1)
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+class PersistentCooldown:
+    def __init__(self, db):
+        self.db = db
+
+    async def get_cooldown(self, user_id: int, command_name: str) -> Optional[datetime]:
+        async with self.db.acquire() as conn:
+            record = await conn.fetchrow(
+                "SELECT reset_time FROM cooldowns WHERE user_id = $1 AND command = $2",
+                user_id, command_name
+            )
+            return record['reset_time'] if record else None
+
+    async def set_cooldown(self, user_id: int, command_name: str, reset_time: datetime):
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO cooldowns (user_id, command, reset_time)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (user_id, command) DO UPDATE
+                   SET reset_time = $3""",
+                user_id, command_name, reset_time
+            )
 
 async def create_db_pool():
     try:
@@ -70,16 +77,6 @@ async def create_db_pool():
         )
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS profiles (
-                    user_id BIGINT PRIMARY KEY,
-                    bio TEXT DEFAULT '',
-                    level INTEGER DEFAULT 1,
-                    xp INTEGER DEFAULT 0,
-                    achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
-                    last_daily TIMESTAMP DEFAULT NULL
-                )
-            """)
         return pool
     except Exception as e:
         print(f"❌ Ошибка подключения к базе данных: {e}")
@@ -89,6 +86,8 @@ async def create_db_pool():
 async def on_ready():
     try:
         bot.db = await create_db_pool()
+        bot.cooldown = PersistentCooldown(bot.db)
+        
         async with bot.db.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -104,27 +103,21 @@ async def on_ready():
                     role_color TEXT
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS cooldowns (
+                    user_id BIGINT,
+                    command TEXT,
+                    reset_time TIMESTAMP,
+                    PRIMARY KEY (user_id, command)
+                )
+            """)
+        
         print(f"✅ Бот запущен как {bot.user}")
+        print(f"✅ Успешное подключение к базе данных")
+        
     except Exception as e:
         print(f"❌ Критическая ошибка при запуске бота: {e}")
         await bot.close()
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, CommandOnCooldown):
-        seconds = int(error.retry_after)
-        minutes = seconds // 60
-        seconds = seconds % 60
-        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед повторным использованием!")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Не хватает аргумента: {error.param.name}")
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Неверный тип аргумента!")
-    elif isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ У вас нет прав для этой команды!")
-    else:
-        print(f"⚠ Необработанная ошибка: {type(error)} - {error}")
-        await ctx.send("❌ Произошла неизвестная ошибка при выполнении команды")
 
 async def close_db():
     if hasattr(bot, 'db') and not bot.db.is_closed():
@@ -162,35 +155,24 @@ async def create_custom_role(user_id: int, role_id: int, role_name: str, role_co
             DO UPDATE SET role_id = $2, role_name = $3, role_color = $4
         """, user_id, role_id, role_name, role_color)
 
-async def get_profile(user_id: int):
-    async with bot.db.acquire() as conn:
-        profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
-        if not profile:
-            await conn.execute("INSERT INTO profiles (user_id) VALUES ($1)", user_id)
-            profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
-        return profile
+@bot.check
+async def cooldown_check(ctx):
+    if ctx.command.is_on_cooldown(ctx):
+        reset_time = await bot.cooldown.get_cooldown(ctx.author.id, ctx.command.name)
+        if reset_time and reset_time > datetime.utcnow():
+            raise CommandOnCooldown(ctx.command.cooldown, (reset_time - datetime.utcnow()).total_seconds())
+    return True
 
-async def update_profile(user_id: int, **kwargs):
-    async with bot.db.acquire() as conn:
-        set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(kwargs.keys())])
-        values = [user_id] + list(kwargs.values())
-        await conn.execute(f"""
-            UPDATE profiles
-            SET {set_clause}
-            WHERE user_id = $1
-        """, *values)
-
-async def add_xp(user_id: int, xp_amount: int):
-    profile = await get_profile(user_id)
-    new_xp = profile['xp'] + xp_amount
-    new_level = profile['level']
-    
-    if new_xp >= new_level * 100:
-        new_level += 1
-        new_xp = 0
-    
-    await update_profile(user_id, xp=new_xp, level=new_level)
-    return new_level > profile['level']
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, CommandOnCooldown):
+        seconds = int(error.retry_after)
+        minutes = seconds // 60
+        seconds = seconds % 60
+        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед повторным использованием!")
+    else:
+        print(f"⚠ Ошибка команды: {error}")
+        await ctx.send("❌ Произошла ошибка при выполнении команды")
 
 @bot.command(name="фарм")
 @commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)
@@ -332,6 +314,7 @@ async def daily(ctx):
 @bot.command(name="бакшот")
 @commands.cooldown(1, BUCKSHOT_COOLDOWN, commands.BucketType.user)
 async def buckshot(ctx, bet: int):
+    """Создать дуэль 1v1 с указанной ставкой"""
     if bet < 100:
         await ctx.send("❌ Минимальная ставка - 100 кредитов!")
         return
@@ -349,37 +332,27 @@ async def buckshot(ctx, bet: int):
     active_buckshots[ctx.channel.id] = {
         "host": ctx.author.id,
         "bet": bet,
-        "participant": None,
-        "message": None,
-        "chambers": [],
-        "current_chamber": 0,
-        "live_bullet_position": -1,
-        "current_player": None
+        "participant": None
     }
 
     embed = discord.Embed(
         title="💥 Бакшот-дуэль начата!",
-        description=f"{ctx.author.mention} ставит {bet} кредитов!\n"
-                    f"Первый, кто напишет !присоединиться, сразится с ним.\n"
-                    f"Победитель забирает {bet*2} кредитов!\n\n"
-                    f"🔫 Правила:\n"
-                    f"- В барабане 6 патронов\n"
-                    f"- Только 1 боевой патрон\n"
-                    f"- Выбирайте, стрелять в себя или соперника",
+        description=f"{ctx.author.mention} ставит **{bet}** кредитов!\n"
+                    f"Первый, кто напишет `!присоединиться`, сразится с ним.\n"
+                    f"Победитель забирает **{bet*2}** кредитов!",
         color=0xff0000
     )
-    embed.set_image(url=BUCKSHOT_GIF)
-    msg = await ctx.send(embed=embed)
-    active_buckshots[ctx.channel.id]["message"] = msg
+    await ctx.send(embed=embed)
 
-    await asyncio.sleep(240)
-    if ctx.channel.id in active_buckshots and active_buckshots[ctx.channel.id]["participant"] is None:
+    await asyncio.sleep(120)
+    if ctx.channel.id in active_buckshots:
         await update_balance(ctx.author.id, bet)
         del active_buckshots[ctx.channel.id]
         await ctx.send("🕒 Время вышло! Дуэль отменена.")
 
 @bot.command(name="присоединиться")
 async def join_buckshot(ctx):
+    """Присоединиться к активной дуэли"""
     if ctx.channel.id not in active_buckshots:
         await ctx.send("❌ В этом канале нет активных дуэлей!")
         return
@@ -401,150 +374,27 @@ async def join_buckshot(ctx):
 
     await update_balance(ctx.author.id, -duel["bet"])
     duel["participant"] = ctx.author.id
-    
-    # Генерируем барабан с 1 боевым патроном в случайной позиции
-    duel["live_bullet_position"] = random.randint(0, 5)
-    duel["current_chamber"] = 0
-    duel["current_player"] = duel["host"]  # Начинает создатель дуэли
-    
-    host = await bot.fetch_user(duel["host"])
-    participant = await bot.fetch_user(duel["participant"])
-    
-    view = BuckshotView(duel)
+
+    msg = await ctx.send("🔫 **Дуэль начинается...**\n3...")
+    await asyncio.sleep(1)
+    await msg.edit(content="🔫 **Дуэль начинается...**\n2...")
+    await asyncio.sleep(1)
+    await msg.edit(content="🔫 **Дуэль начинается...**\n1...")
+    await asyncio.sleep(1)
+
+    winner_id = random.choice([duel["host"], duel["participant"]])
+    total_pot = duel["bet"] * 2
+    await update_balance(winner_id, total_pot)
+    winner = await bot.fetch_user(winner_id)
+
     embed = discord.Embed(
-        title="🔫 Бакшот-дуэль!",
-        description=f"Игроки:\n"
-                    f"{host.mention} (Ход)\n"
-                    f"{participant.mention}\n\n"
-                    f"Ставка: {duel['bet']*2} кредитов\n"
-                    f"Текущий патрон: {duel['current_chamber']+1}/6\n"
-                    f"Боевой патрон на позиции: ❓",
-        color=0xff0000
+        title="🎉 Дуэль завершена!",
+        description=f"Победитель: {winner.mention}\nВыигрыш: **{total_pot}** кредитов!",
+        color=0x00ff00
     )
-    embed.set_image(url=BUCKSHOT_GIF)
-    await duel["message"].edit(embed=embed, view=view)
-
-class BuckshotView(discord.ui.View):
-    def init(self, duel_data):
-        super().init(timeout=180)
-        self.duel = duel_data
-    
-    async def update_embed(self, interaction: discord.Interaction, description: str):
-        host = await interaction.guild.fetch_member(self.duel["host"])
-        participant = await interaction.guild.fetch_member(self.duel["participant"])
-        
-        current_player = host if self.duel["current_player"] == self.duel["host"] else participant
-
-
-opponent = participant if current_player == host else host
-        
-        embed = discord.Embed(
-            title="🔫 Бакшот-дуэль!",
-            description=f"{description}\n\n"
-                        f"Игроки:\n"
-                        f"{host.mention} {'(Ход)' if current_player == host else ''}\n"
-                        f"{participant.mention} {'(Ход)' if current_player == participant else ''}\n\n"
-                        f"Ставка: {self.duel['bet']*2} кредитов\n"
-                        f"Текущий патрон: {self.duel['current_chamber']+1}/6\n"
-                        f"Боевой патрон на позиции: ❓",
-            color=0xff0000
-        )
-        embed.set_image(url=BUCKSHOT_GIF)
-        await interaction.message.edit(embed=embed)
-    
-    @discord.ui.button(label="Выстрелить в себя", style=discord.ButtonStyle.red, emoji="💀")
-    async def shoot_self(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.duel["current_player"]:
-            await interaction.response.send_message("❌ Сейчас не ваш ход!", ephemeral=True)
-            return
-        
-        # Проверяем текущий патрон
-        if self.duel["current_chamber"] == self.duel["live_bullet_position"]:
-            # Игрок проиграл
-            winner_id = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
-            winner = await interaction.guild.fetch_member(winner_id)
-            
-            total_pot = self.duel["bet"] * 2
-            await update_balance(winner_id, total_pot)
-            
-            embed = discord.Embed(
-                title="💀 Выстрел в себя!",
-                description=f"🔫 БАХ! {interaction.user.mention} выстрелил в себя и проиграл!\n"
-                            f"💥 Это был боевой патрон на позиции {self.duel['current_chamber']+1}\n"
-                            f"🎉 Победитель: {winner.mention}\n"
-                            f"💰 Выигрыш: {total_pot} кредитов!",
-                color=0x00ff00
-            )
-            embed.set_image(url=BUCKSHOT_GIF)
-            await interaction.message.edit(embed=embed, view=None)
-            del active_buckshots[interaction.channel.id]
-        else:
-            # Холостой выстрел, ход переходит
-            self.duel["current_chamber"] += 1
-            self.duel["current_player"] = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
-            await self.update_embed(
-                interaction,
-                f"💨 {interaction.user.mention} выстрелил в себя - холостой патрон!\n"
-                f"🔫 Следующий патрон: {self.duel['current_chamber']+1}/6\n"
-                f"Теперь ход противника."
-            )
-        
-        await interaction.response.defer()
-    
-    @discord.ui.button(label="Выстрелить в соперника", style=discord.ButtonStyle.green, emoji="🎯")
-    async def shoot_opponent(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.duel["current_player"]:
-            await interaction.response.send_message("❌ Сейчас не ваш ход!", ephemeral=True)
-            return
-        
-        # Проверяем текущий патрон
-        if self.duel["current_chamber"] == self.duel["live_bullet_position"]:
-            # Игрок выиграл
-            total_pot = self.duel["bet"] * 2
-            await update_balance(interaction.user.id, total_pot)
-            
-            opponent_id = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
-            opponent = await interaction.guild.fetch_member(opponent_id)
-            
-            embed = discord.Embed(
-                title="🎯 Выстрел в соперника!",
-                description=f"🔫 БАХ! {interaction.user.mention} выстрелил в {opponent.mention} и победил!\n"
-
-f"💥 Это был боевой патрон на позиции {self.duel['current_chamber']+1}\n"
-                            f"💰 Выигрыш: {total_pot} кредитов!",
-                color=0x00ff00
-            )
-            embed.set_image(url=BUCKSHOT_GIF)
-            await interaction.message.edit(embed=embed, view=None)
-            del active_buckshots[interaction.channel.id]
-        else:
-            # Холостой выстрел, ход переходит
-            self.duel["current_chamber"] += 1
-            self.duel["current_player"] = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
-            await self.update_embed(
-                interaction,
-                f"💨 {interaction.user.mention} выстрелил в соперника - холостой патрон!\n"
-                f"🔫 Следующий патрон: {self.duel['current_chamber']+1}/6\n"
-                f"Теперь ход противника."
-            )
-        
-        await interaction.response.defer()
-    
-    async def on_timeout(self):
-        if self.duel["message"].channel.id in active_buckshots:
-            host = await self.duel["message"].guild.fetch_member(self.duel["host"])
-            participant = await self.duel["message"].guild.fetch_member(self.duel["participant"])
-            
-            # Возвращаем ставки
-            await update_balance(self.duel["host"], self.duel["bet"])
-            await update_balance(self.duel["participant"], self.duel["bet"])
-            
-            embed = discord.Embed(
-                title="🕒 Время вышло!",
-                description=f"Дуэль между {host.mention} и {participant.mention} отменена из-за бездействия.",
-                color=0xff0000
-            )
-            await self.duel["message"].edit(
+    await ctx.send(embed=embed)
+    del active_buckshots[ctx.channel.id]
+                
 @bot.command(name="славанн")
 @commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
 async def slav_party(ctx):
@@ -574,6 +424,7 @@ async def slav_party(ctx):
         penalty = min(10, balance)
         await update_balance(user.id, -penalty)
         await ctx.send(f'🕊 {user.mention}, -{penalty} кредитов. Попробуй ещё! (Баланс: {await get_balance(user.id)})')
+
         
 
 @bot.command(name="баланс")
