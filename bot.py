@@ -1,4 +1,3 @@
-AgentF, [20.05.2025 20:55]
 import discord
 from discord.ext import commands
 from discord.ext.commands import CommandOnCooldown
@@ -120,7 +119,6 @@ async def get_cooldown(user_id: int, command_name: str) -> Optional[datetime]:
 async def set_cooldown(user_id: int, command_name: str, cooldown_end: datetime):
     async with bot.db.acquire() as conn:
 
-AgentF, [20.05.2025 20:55]
 await conn.execute("""
             INSERT INTO command_cooldowns (user_id, command_name, cooldown_end)
             VALUES ($1, $2, $3)
@@ -222,7 +220,6 @@ async def get_profile(user_id: int):
 async def update_profile(user_id: int, **kwargs):
     async with bot.db.acquire() as conn:
 
-AgentF, [20.05.2025 20:55]
 set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(kwargs.keys())])
         values = [user_id] + list(kwargs.values())
         await conn.execute(f"""
@@ -333,7 +330,6 @@ async def buckshot(ctx, bet: int):
         "current_player": None
     }
 
-AgentF, [20.05.2025 20:55]
 embed = discord.Embed(
         title="💥 Бакшот-дуэль начата!",
         description=f"{ctx.author.mention} ставит {bet} кредитов!\n"
@@ -426,7 +422,6 @@ class BuckshotView(discord.ui.View):
     @discord.ui.button(label="Выстрелить в себя", style=discord.ButtonStyle.red, emoji="💀")
     async def shoot_self(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-AgentF, [20.05.2025 20:55]
 if interaction.user.id != self.duel["current_player"]:
             await interaction.response.send_message("❌ Сейчас не ваш ход!", ephemeral=True)
             return
@@ -500,7 +495,6 @@ if interaction.user.id != self.duel["current_player"]:
         if self.duel["message"].channel.id in active_buckshots:
             host = await self.duel["message"].guild.fetch_member(self.duel["host"])
 
-AgentF, [20.05.2025 20:55]
 participant = await self.duel["message"].guild.fetch_member(self.duel["participant"])
             
             await update_balance(self.duel["host"], self.duel["bet"])
@@ -609,7 +603,6 @@ async def top(ctx):
         except:
             leaderboard.append(f"{i}. [Неизвестный] — {record['balance']} кредитов")
 
-AgentF, [20.05.2025 20:55]
 await ctx.send("🏆 Топ 10:\n" + "\n".join(leaderboard))
 
 @bot.command(name="допкредит")
@@ -721,7 +714,6 @@ async def start_event(ctx, hours: int, multiplier: float, event_type: str = "ф�
     )
     await ctx.send(embed=embed)
 
-AgentF, [20.05.2025 20:55]
 @bot.command(name="ивент_статус")
 async def event_status(ctx):
     if EVENT_ACTIVE:
