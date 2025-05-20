@@ -119,12 +119,11 @@ async def get_cooldown(user_id: int, command_name: str) -> Optional[datetime]:
 async def set_cooldown(user_id: int, command_name: str, cooldown_end: datetime):
     async with bot.db.acquire() as conn:
 
-await conn.execute("""
-            INSERT INTO command_cooldowns (user_id, command_name, cooldown_end)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (user_id, command_name)
-            DO UPDATE SET cooldown_end = $3
-        """, user_id, command_name, cooldown_end)
+with conn.cursor() as cursor:
+    await conn.execute("""
+        INSERT INTO users (user_id, balance) VALUES (?, ?)
+    """, (user_id, amount))
+
 
 def persistent_cooldown(rate, per, type):
     async def predicate(ctx):
@@ -709,7 +708,7 @@ async def start_event(ctx, hours: int, multiplier: float, event_type: str = "ф�
     
     embed = discord.Embed(
         title="🎊 ИВЕНТ АКТИВИРОВАН!",
-        description=f"{event_type.upper()} дает x{multiplier} награды!\nДействует {hours} часов.",
+        description=f"**{event_type.upper()}** дает x{multiplier} награды!\nДействует {hours} часов.",
         color=0xffd700
     )
     await ctx.send(embed=embed)
