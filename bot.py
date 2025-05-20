@@ -443,31 +443,6 @@ async def slav_party(ctx):
         await update_balance(user.id, -penalty)
         await ctx.send(f'🕊 {user.mention}, -{penalty} кредитов. Попробуй ещё! (Баланс: {await get_balance(user.id)})')
         
-@bot.command(name="фарм")
-@commands.cooldown(rate=1, per=1200, type=commands.BucketType.user)
-async def farm(ctx):
-    if not discord.utils.get(ctx.author.roles, name=ROLE_NAME):
-        await ctx.send("⛔ Только для Патриотов!")
-        return
-
-    base_reward = random.randint(20, 50)
-    
-    if EVENT_ACTIVE and EVENT_TYPE == "фарм":
-        reward = int(base_reward * EVENT_MULTIPLIER)
-        event_bonus = f" (Ивент x{EVENT_MULTIPLIER})"
-    else:
-        reward = base_reward
-        event_bonus = ""
-    
-    level_up = await add_xp(ctx.author.id, 5)
-    await update_balance(ctx.author.id, reward)
-    
-    msg = f"🌾 {ctx.author.mention}, вы получили {reward} кредитов и 5 опыта{event_bonus}!"
-    if level_up:
-        profile = await get_profile(ctx.author.id)
-        msg += f"\n🎉 Новый уровень: {profile['level']}"
-    
-    await ctx.send(msg)
 
 @bot.command(name="баланс")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
