@@ -8,6 +8,7 @@ import sys
 import asyncio
 import time
 from typing import Optional
+from datetime import datetime
 
 # Настройки
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -17,16 +18,16 @@ CUSTOM_ROLE_PRICE = 2000
 CRIT_CHANCE = 10
 SUCCESS_CHANCE = 40
 ADMIN_ROLES = ["создатель", "главный модер"]
-ROB_CHANCE = 25  # Шанс успешной кражи
-ROB_PERCENT = 20  # Процент кражи/штрафа
-ROB_COOLDOWN = 3600  # 1 час кулдауна
-CASINO_COOLDOWN = 60  # 1 минута кулдауна
-BUCKSHOT_COOLDOWN = 1800  # 30 минут кулдауна для бакшота # NEW
+ROB_CHANCE = 25
+ROB_PERCENT = 20
+ROB_COOLDOWN = 3600
+CASINO_COOLDOWN = 60
+BUCKSHOT_COOLDOWN = 1800
 CASINO_MULTIPLIERS = {
-    2: 35,  # x2 (35% шанс)
-    3: 10,  # x3 (10% шанс)
-    5: 2,   # x5 (2% шанс)
-    0: 53   # Проигрыш (53% шанс)
+    2: 35,
+    3: 10,
+    5: 2,
+    0: 53
 }
 
 # Константы для ивентов
@@ -35,12 +36,11 @@ EVENT_MULTIPLIER = 1.0
 EVENT_TYPE = None
 EVENT_END_TIME = 0
 
-# NEW: Глобальные переменные для бакшота
-active_buckshots = {}  # {channel_id: {"host": user_id, "bet": amount, "participant": None}}
+# Глобальные переменные для бакшота
+active_buckshots = {}
 BUCKSHOT_GIF = "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExb21peDBuYWEzazhhb2EweWhzazd3NjkydnZ0dHI5M2x6b3d5aHdtdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/DQb9xdHQwFl9fvJ1ls/giphy.gif"
 
 def is_admin(member: discord.Member) -> bool:
-    """Проверяет, является ли пользователь администратором"""
     return any(role.name.lower() in ADMIN_ROLES for role in member.roles)
 
 # Проверка обязательных переменных
@@ -70,6 +70,17 @@ async def create_db_pool():
         )
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
+            # Создаем таблицу профилей, если ее нет
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS profiles (
+                    user_id BIGINT PRIMARY KEY,
+                    bio TEXT DEFAULT '',
+                    level INTEGER DEFAULT 1,
+                    xp INTEGER DEFAULT 0,
+                    achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
+                    last_daily TIMESTAMP DEFAULT NULL
+                )
+            """)
         return pool
     except Exception as e:
         print(f"❌ Ошибка подключения к базе данных: {e}")
@@ -139,22 +150,111 @@ async def create_custom_role(user_id: int, role_id: int, role_name: str, role_co
             DO UPDATE SET role_id = $2, role_name = $3, role_color = $4
         """, user_id, role_id, role_name, role_color)
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, CommandOnCooldown):
-        seconds = int(error.retry_after)
-        minutes = seconds // 60
-        seconds = seconds % 60
-        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед повторным использованием!")
-    else:
-        print(f"⚠ Ошибка команды: {error}")
-        await ctx.send("❌ Произошла ошибка при выполнении команды")
+async def get_profile(user_id: int):
+    async with bot.db.acquire() as conn:
+        profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
+        if not profile:
+            # Создаем новый профиль, если его нет
+            await conn.execute("INSERT INTO profiles (user_id) VALUES ($1)", user_id)
+            profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
+        return profile
 
-# NEW: Бакшот-рулетка (дуэль 1v1)
+async def update_profile(user_id: int, **kwargs):
+    async with bot.db.acquire() as conn:
+        set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(kwargs.keys())])
+        values = [user_id] + list(kwargs.values())
+        await conn.execute(f"""
+            UPDATE profiles
+            SET {set_clause}
+            WHERE user_id = $1
+        """, *values)
+
+async def add_xp(user_id: int, xp_amount: int):
+    profile = await get_profile(user_id)
+    new_xp = profile['xp'] + xp_amount
+    new_level = profile['level']
+    
+    # Проверяем повышение уровня (100 XP за уровень)
+    if new_xp >= new_level * 100:
+        new_level += 1
+        new_xp = 0
+    
+    await update_profile(user_id, xp=new_xp, level=new_level)
+    return new_level > profile['level']  # Возвращаем True, если уровень повысился
+
+@bot.command(name="профиль")
+async def profile(ctx, member: discord.Member = None):
+    """Показывает профиль пользователя"""
+    user = member or ctx.author
+    profile_data = await get_profile(user.id)
+    balance = await get_balance(user.id)
+    
+    # Получаем кастомную роль пользователя
+    custom_role = await get_custom_role(user.id)
+    
+    # Создаем embed
+    embed = discord.Embed(
+        title=f"📊 Профиль {user.display_name}",
+        color=user.color
+    )
+    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
+    
+    # Основная информация
+    embed.add_field(name="💵 Баланс", value=f"{balance} кредитов", inline=True)
+    embed.add_field(name="📊 Уровень", value=f"{profile_data['level']}", inline=True)
+    embed.add_field(name="🌟 Опыт", value=f"{profile_data['xp']}/{profile_data['level'] * 100}", inline=True)
+    
+    # Биография
+    bio = profile_data['bio'] or "Пока ничего не написано"
+    embed.add_field(name="📝 О себе", value=bio, inline=False)
+    
+    # Кастомная роль
+    if custom_role:
+        embed.add_field(
+            name="🎭 Кастомная роль", 
+            value=f"Имя: {custom_role['role_name']}\nЦвет: {custom_role['role_color']}", 
+            inline=False
+        )
+    
+    # Ачивки
+    achievements = profile_data['achievements'] or []
+    if achievements:
+        embed.add_field(name="🏆 Ачивки", value="\n".join(f"• {ach}" for ach in achievements), inline=False)
+    else:
+        embed.add_field(name="🏆 Ачивки", value="Пока нет ачивок", inline=False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="био")
+async def set_bio(ctx, *, bio: str):
+    """Установить биографию в профиль"""
+    if len(bio) > 200:
+        await ctx.send("❌ Биография слишком длинная (макс. 200 символов)")
+        return
+    
+    await update_profile(ctx.author.id, bio=bio)
+    await ctx.send("✅ Ваша биография успешно обновлена!")
+
+@bot.command(name="ежедневная")
+@commands.cooldown(1, 86400, commands.BucketType.user)
+async def daily(ctx):
+    """Получить ежедневную награду"""
+    reward = random.randint(50, 150)
+    level_up = await add_xp(ctx.author.id, 20)
+    
+    await update_balance(ctx.author.id, reward)
+    await update_profile(ctx.author.id, last_daily=datetime.now())
+    
+    msg = f"🎁 {ctx.author.mention}, вы получили {reward} кредитов и 20 опыта!"
+    if level_up:
+        profile = await get_profile(ctx.author.id)
+        msg += f"\n🎉 Поздравляем! Новый уровень: {profile['level']}"
+    
+    await ctx.send(msg)
+
 @bot.command(name="бакшот")
 @commands.cooldown(1, BUCKSHOT_COOLDOWN, commands.BucketType.user)
 async def buckshot(ctx, bet: int):
-    """Создать дуэль 1v1 с указанной ставкой"""
     if bet < 100:
         await ctx.send("❌ Минимальная ставка - 100 кредитов!")
         return
@@ -164,12 +264,10 @@ async def buckshot(ctx, bet: int):
         await ctx.send("❌ Недостаточно средств!")
         return
 
-    # Проверка активных дуэлей
     if ctx.channel.id in active_buckshots:
         await ctx.send("❌ В этом канале уже есть активная дуэль!")
         return
 
-    # Блокируем средства
     await update_balance(ctx.author.id, -bet)
     active_buckshots[ctx.channel.id] = {
         "host": ctx.author.id,
@@ -177,7 +275,6 @@ async def buckshot(ctx, bet: int):
         "participant": None
     }
 
-    # Красивое оформление
     embed = discord.Embed(
         title="💥 Бакшот-дуэль начата!",
         description=f"{ctx.author.mention} ставит **{bet}** кредитов!\n"
@@ -188,23 +285,20 @@ async def buckshot(ctx, bet: int):
     embed.set_image(url=BUCKSHOT_GIF)
     await ctx.send(embed=embed)
 
-    # Таймер отмены (2 минуты)
     await asyncio.sleep(240)
     if ctx.channel.id in active_buckshots:
-        await update_balance(ctx.author.id, bet)  # Возвращаем ставку
+        await update_balance(ctx.author.id, bet)
         del active_buckshots[ctx.channel.id]
         await ctx.send("🕒 Время вышло! Дуэль отменена.")
 
 @bot.command(name="присоединиться")
 async def join_buckshot(ctx):
-    """Присоединиться к активной дуэли"""
     if ctx.channel.id not in active_buckshots:
         await ctx.send("❌ В этом канале нет активных дуэлей!")
         return
     
     duel = active_buckshots[ctx.channel.id]
     
-    # Проверки
     if duel["participant"] is not None:
         await ctx.send("❌ Кто-то уже присоединился к дуэли!")
         return
@@ -218,11 +312,9 @@ async def join_buckshot(ctx):
         await ctx.send(f"❌ Для участия нужно {duel['bet']} кредитов!")
         return
 
-    # Блокируем средства участника
     await update_balance(ctx.author.id, -duel["bet"])
     duel["participant"] = ctx.author.id
 
-    # Анимация дуэли
     msg = await ctx.send("🔫 **Дуэль начинается...**\n3...")
     await asyncio.sleep(1)
     await msg.edit(content="🔫 **Дуэль начинается...**\n2...")
@@ -230,13 +322,11 @@ async def join_buckshot(ctx):
     await msg.edit(content="🔫 **Дуэль начинается...**\n1...")
     await asyncio.sleep(1)
 
-    # Определяем победителя (50/50)
     winner_id = random.choice([duel["host"], duel["participant"]])
     total_pot = duel["bet"] * 2
     await update_balance(winner_id, total_pot)
     winner = await bot.fetch_user(winner_id)
 
-    # Результат
     embed = discord.Embed(
         title="🎉 Дуэль завершена!",
         description=f"Победитель: {winner.mention}\n"
@@ -293,8 +383,15 @@ async def farm(ctx):
         reward = base_reward
         event_bonus = ""
     
+    level_up = await add_xp(ctx.author.id, 5)
     await update_balance(ctx.author.id, reward)
-    await ctx.send(f"🌾 {ctx.author.mention}, вы получили {reward} кредитов{event_bonus}! Баланс: {await get_balance(ctx.author.id)}")
+    
+    msg = f"🌾 {ctx.author.mention}, вы получили {reward} кредитов и 5 опыта{event_bonus}!"
+    if level_up:
+        profile = await get_profile(ctx.author.id)
+        msg += f"\n🎉 Новый уровень: {profile['level']}"
+    
+    await ctx.send(msg)
 
 @bot.command(name="баланс")
 @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
@@ -472,7 +569,7 @@ async def shop(ctx):
 Пример: `!купитьроль "Богач" #ff0000`
 
 🎮 `!бакшот сумма` - Дуэль 1v1 (30м кд)
-🎰 `!казино сумма` - Классическое казино
+🎰 `!везение сумма` - Классическое казино
 
 💰 Ваш баланс: {await get_balance(ctx.author.id)} кредитов
 """
@@ -518,26 +615,35 @@ async def help_command(ctx):
     help_text = f"""
 📜 **Команды бота:**
 
-🔴 `!славанн` - Стать Патриотом (2ч кд)
-🌾 `!фарм` - Заработок (20м кд)
-💰 `!баланс` - Ваш баланс
-💸 `!перевести @юзер сумма` - Перевод
-🏆 `!топ` - Топ-10 игроков
-🛍 `!магазин` - Магазин
-🎨 `!купитьроль "Назв" #Цвет` - Купить роль
-🎮 `!бакшот сумма` - Дуэль 1v1 (30м кд) # NEW
-➕ `!допкредит @юзер сумма` - Добавить кредиты (админ)
-➖ `!минускредит @юзер сумма` - Снять кредиты (админ)
-🦹 `!ограбить @юзер` - Попытка кражи (1ч кд)
-🎰 `!везение сумма` - Игра в везение (1м кд)
-ℹ️ `!помощь` - Справка
-📢 `!ивент_старт` - Стартует ивент для фарма (админ)
+📊 Профиль:
+`!профиль [@юзер]` - Посмотреть профиль
+`!био текст` - Установить биографию
+`!ежедневная` - Получить ежедневную награду (24ч кд)
+
+🎮 Игровые:
+`!славанн` - Стать Патриотом (2ч кд)
+`!фарм` - Заработок (20м кд)
+`!бакшот сумма` - Дуэль 1v1 (30м кд)
+`!везение сумма` - игра в везение (1м кд)
+`!ограбить @юзер` - Попытка кражи (1ч кд)
+
+💰 Экономика:
+`!баланс` - Ваш баланс
+`!перевести @юзер сумма` - Перевод
+`!топ` - Топ-10 игроков
+`!магазин` - Магазин
+`!купитьроль "Назв" #Цвет` - Купить роль
+
+🛠 Админ:
+`!допкредит @юзер сумма` - Добавить кредиты
+`!минускредит @юзер сумма` - Снять кредиты
+`!ивент_старт` - Старт ивента
 
 Примеры:
+`!профиль @Игрок`
+`!био Люблю играть в бакшот!`
 `!купитьроль "Богач" #ff0000`
-`!везение 500`
-`!бакшот 1000` # NEW
-`!ограбить @Игрок`
+`!бакшот 1000`
 `!ивент_старт 2 2.5 фарм` (2 часа, x2.5 к фарму)
 """
     await ctx.send(help_text)
