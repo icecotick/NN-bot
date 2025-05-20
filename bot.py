@@ -418,7 +418,7 @@ async def join_buckshot(ctx):
                     f"{host.mention} (Ход)\n"
                     f"{participant.mention}\n\n"
                     f"Ставка: **{duel['bet']*2}** кредитов\n"
-                    f"Осталось патронов: {len(duel['chambers']}\n"
+                    f"Осталось патронов: {len(duel['chambers'])}\n"
                     f"Боевых патронов: 1",
         color=0xff0000
     )
