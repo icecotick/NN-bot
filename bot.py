@@ -6,6 +6,7 @@ import os
 import asyncpg
 import sys
 import asyncio
+import discord.ui
 import time
 from datetime import datetime
 
