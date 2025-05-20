@@ -70,38 +70,38 @@ async def create_db_pool():
         )
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
-            # Создаем таблицы
+            # Создаем таблицы (ФИКС ОТСТУПОВ В SQL-ЗАПРОСЕ)
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS profiles (
-                    user_id BIGINT PRIMARY KEY,
-                    bio TEXT DEFAULT '',
-                    level INTEGER DEFAULT 1,
-                    xp INTEGER DEFAULT 0,
-                    achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
-                    last_daily TIMESTAMP DEFAULT NULL
-                )
+CREATE TABLE IF NOT EXISTS profiles (
+    user_id BIGINT PRIMARY KEY,
+    bio TEXT DEFAULT '',
+    level INTEGER DEFAULT 1,
+    xp INTEGER DEFAULT 0,
+    achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
+    last_daily TIMESTAMP DEFAULT NULL
+);
             """)
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    balance INTEGER DEFAULT 0
-                )
+CREATE TABLE IF NOT EXISTS users (
+    user_id BIGINT PRIMARY KEY,
+    balance INTEGER DEFAULT 0
+);
             """)
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS custom_roles (
-                    user_id BIGINT PRIMARY KEY,
-                    role_id BIGINT,
-                    role_name TEXT,
-                    role_color TEXT
-                )
+CREATE TABLE IF NOT EXISTS custom_roles (
+    user_id BIGINT PRIMARY KEY,
+    role_id BIGINT,
+    role_name TEXT,
+    role_color TEXT
+);
             """)
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS command_cooldowns (
-                    user_id BIGINT,
-                    command_name TEXT,
-                    cooldown_end TIMESTAMP,
-                    PRIMARY KEY (user_id, command_name)
-                )
+CREATE TABLE IF NOT EXISTS command_cooldowns (
+    user_id BIGINT,
+    command_name TEXT,
+    cooldown_end TIMESTAMP,
+    PRIMARY KEY (user_id, command_name)
+);
             """)
         return pool
     except Exception as e:
@@ -118,8 +118,7 @@ async def get_cooldown(user_id: int, command_name: str) -> Optional[datetime]:
 
 async def set_cooldown(user_id: int, command_name: str, cooldown_end: datetime):
     async with bot.db.acquire() as conn:
-
-await conn.execute("""
+        await conn.execute("""
             INSERT INTO command_cooldowns (user_id, command_name, cooldown_end)
             VALUES ($1, $2, $3)
             ON CONFLICT (user_id, command_name)
