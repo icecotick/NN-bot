@@ -327,7 +327,6 @@ async def daily(ctx):
         msg += f"\n🎉 Поздравляем! Новый уровень: {profile['level']}"
     
     await ctx.send(msg)
-
 @bot.command(name="бакшот")
 @commands.cooldown(1, BUCKSHOT_COOLDOWN, commands.BucketType.user)
 async def buckshot(ctx, bet: int):
@@ -348,21 +347,29 @@ async def buckshot(ctx, bet: int):
     active_buckshots[ctx.channel.id] = {
         "host": ctx.author.id,
         "bet": bet,
-        "participant": None
+        "participant": None,
+        "message": None,
+        "chambers": [],
+        "current_player": None
     }
 
     embed = discord.Embed(
         title="💥 Бакшот-дуэль начата!",
         description=f"{ctx.author.mention} ставит **{bet}** кредитов!\n"
                     f"Первый, кто напишет `!присоединиться`, сразится с ним.\n"
-                    f"Победитель забирает **{bet*2}** кредитов!",
+                    f"Победитель забирает **{bet*2}** кредитов!\n\n"
+                    f"🔫 Правила:\n"
+                    f"- В барабане 6 патронов\n"
+                    f"- Только 1 боевой патрон\n"
+                    f"- Выбирайте, стрелять в себя или соперника",
         color=0xff0000
     )
     embed.set_image(url=BUCKSHOT_GIF)
-    await ctx.send(embed=embed)
+    msg = await ctx.send(embed=embed)
+    active_buckshots[ctx.channel.id]["message"] = msg
 
     await asyncio.sleep(240)
-    if ctx.channel.id in active_buckshots:
+    if ctx.channel.id in active_buckshots and active_buckshots[ctx.channel.id]["participant"] is None:
         await update_balance(ctx.author.id, bet)
         del active_buckshots[ctx.channel.id]
         await ctx.send("🕒 Время вышло! Дуэль отменена.")
@@ -390,28 +397,148 @@ async def join_buckshot(ctx):
 
     await update_balance(ctx.author.id, -duel["bet"])
     duel["participant"] = ctx.author.id
-
-    msg = await ctx.send("🔫 **Дуэль начинается...**\n3...")
-    await asyncio.sleep(1)
-    await msg.edit(content="🔫 **Дуэль начинается...**\n2...")
-    await asyncio.sleep(1)
-    await msg.edit(content="🔫 **Дуэль начинается...**\n1...")
-    await asyncio.sleep(1)
-
-    winner_id = random.choice([duel["host"], duel["participant"]])
-    total_pot = duel["bet"] * 2
-    await update_balance(winner_id, total_pot)
-    winner = await bot.fetch_user(winner_id)
-
+    
+    # Генерируем барабан (1 боевой патрон, остальные холостые)
+    chambers = [False] * 6
+    live_bullet = random.randint(0, 5)
+    chambers[live_bullet] = True
+    random.shuffle(chambers)
+    
+    duel["chambers"] = chambers
+    duel["current_player"] = duel["host"]  # Начинает создатель дуэли
+    
+    host = await bot.fetch_user(duel["host"])
+    participant = await bot.fetch_user(duel["participant"])
+    
+    view = BuckshotView(duel)
     embed = discord.Embed(
-        title="🎉 Дуэль завершена!",
-        description=f"Победитель: {winner.mention}\n"
-                    f"Выигрыш: **{total_pot}** кредитов!",
-        color=0x00ff00
+        title="🔫 Бакшот-дуэль!",
+        description=f"Игроки:\n"
+                    f"{host.mention} (Ход)\n"
+                    f"{participant.mention}\n\n"
+                    f"Ставка: **{duel['bet']*2}** кредитов\n"
+                    f"Осталось патронов: {len(duel['chambers']}\n"
+                    f"Боевых патронов: 1",
+        color=0xff0000
     )
     embed.set_image(url=BUCKSHOT_GIF)
-    await ctx.send(embed=embed)
-    del active_buckshots[ctx.channel.id]
+    await duel["message"].edit(embed=embed, view=view)
+
+class BuckshotView(discord.ui.View):
+    def __init__(self, duel_data):
+        super().__init__(timeout=180)
+        self.duel = duel_data
+    
+    async def update_embed(self, interaction: discord.Interaction, description: str):
+        host = await interaction.guild.fetch_member(self.duel["host"])
+        participant = await interaction.guild.fetch_member(self.duel["participant"])
+        
+        current_player = host if self.duel["current_player"] == self.duel["host"] else participant
+        opponent = participant if current_player == host else host
+        
+        embed = discord.Embed(
+            title="🔫 Бакшот-дуэль!",
+            description=f"{description}\n\n"
+                        f"Игроки:\n"
+                        f"{host.mention} {'(Ход)' if current_player == host else ''}\n"
+                        f"{participant.mention} {'(Ход)' if current_player == participant else ''}\n\n"
+                        f"Ставка: **{self.duel['bet']*2}** кредитов\n"
+                        f"Осталось патронов: {len(self.duel['chambers'])}\n"
+                        f"Боевых патронов: 1",
+            color=0xff0000
+        )
+        embed.set_image(url=BUCKSHOT_GIF)
+        await interaction.message.edit(embed=embed)
+    
+    @discord.ui.button(label="Выстрелить в себя", style=discord.ButtonStyle.red, emoji="💀")
+    async def shoot_self(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.duel["current_player"]:
+            await interaction.response.send_message("❌ Сейчас не ваш ход!", ephemeral=True)
+            return
+        
+        bullet = self.duel["chambers"].pop(0)
+        
+        if bullet:
+            # Игрок проиграл
+            winner_id = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
+            winner = await interaction.guild.fetch_member(winner_id)
+            
+            total_pot = self.duel["bet"] * 2
+            await update_balance(winner_id, total_pot)
+            
+            embed = discord.Embed(
+                title="💀 Выстрел в себя!",
+                description=f"{interaction.user.mention} выстрелил в себя и проиграл!\n"
+                            f"🎉 Победитель: {winner.mention}\n"
+                            f"💰 Выигрыш: **{total_pot}** кредитов!",
+                color=0x00ff00
+            )
+            embed.set_image(url=BUCKSHOT_GIF)
+            await interaction.message.edit(embed=embed, view=None)
+            del active_buckshots[interaction.channel.id]
+        else:
+            # Холостой выстрел, ход переходит
+            self.duel["current_player"] = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
+            await self.update_embed(
+                interaction,
+                f"💨 {interaction.user.mention} выстрелил в себя - холостой патрон!\n"
+                f"Теперь ход противника."
+            )
+        
+        await interaction.response.defer()
+    
+    @discord.ui.button(label="Выстрелить в соперника", style=discord.ButtonStyle.green, emoji="🎯")
+    async def shoot_opponent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.duel["current_player"]:
+            await interaction.response.send_message("❌ Сейчас не ваш ход!", ephemeral=True)
+            return
+        
+        bullet = self.duel["chambers"].pop(0)
+        
+        if bullet:
+            # Игрок выиграл
+            total_pot = self.duel["bet"] * 2
+            await update_balance(interaction.user.id, total_pot)
+            
+            opponent_id = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
+            opponent = await interaction.guild.fetch_member(opponent_id)
+            
+            embed = discord.Embed(
+                title="🎯 Выстрел в соперника!",
+                description=f"{interaction.user.mention} выстрелил в {opponent.mention} и победил!\n"
+                            f"💰 Выигрыш: **{total_pot}** кредитов!",
+                color=0x00ff00
+            )
+            embed.set_image(url=BUCKSHOT_GIF)
+            await interaction.message.edit(embed=embed, view=None)
+            del active_buckshots[interaction.channel.id]
+        else:
+            # Холостой выстрел, ход переходит
+            self.duel["current_player"] = self.duel["host"] if interaction.user.id == self.duel["participant"] else self.duel["participant"]
+            await self.update_embed(
+                interaction,
+                f"💨 {interaction.user.mention} выстрелил в соперника - холостой патрон!\n"
+                f"Теперь ход противника."
+            )
+        
+        await interaction.response.defer()
+    
+    async def on_timeout(self):
+        if self.duel["message"].channel.id in active_buckshots:
+            host = await self.duel["message"].guild.fetch_member(self.duel["host"])
+            participant = await self.duel["message"].guild.fetch_member(self.duel["participant"])
+            
+            # Возвращаем ставки
+            await update_balance(self.duel["host"], self.duel["bet"])
+            await update_balance(self.duel["participant"], self.duel["bet"])
+            
+            embed = discord.Embed(
+                title="🕒 Время вышло!",
+                description=f"Дуэль между {host.mention} и {participant.mention} отменена из-за бездействия.",
+                color=0xff0000
+            )
+            await self.duel["message"].edit(embed=embed, view=None)
+            del active_buckshots[self.duel["message"].channel.id]
 
 @bot.command(name="славанн")
 @commands.cooldown(rate=1, per=7200, type=commands.BucketType.user)
