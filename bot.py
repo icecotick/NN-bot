@@ -119,10 +119,10 @@ async def get_cooldown(user_id: int, command_name: str) -> Optional[datetime]:
 async def set_cooldown(user_id: int, command_name: str, cooldown_end: datetime):
     async with bot.db.acquire() as conn:
 
-with conn.cursor() as cursor:
-    await conn.execute("""
-        INSERT INTO users (user_id, balance) VALUES (?, ?)
-    """, (user_id, amount))
+async def set_balance(user_id, amount):
+    with conn.cursor() as cursor:
+        cursor.execute("INSERT OR REPLACE INTO users (user_id, balance) VALUES (?, ?)", (user_id, amount))
+        conn.commit()
 
 
 def persistent_cooldown(rate, per, type):
