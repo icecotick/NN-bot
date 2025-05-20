@@ -218,6 +218,25 @@ async def get_profile(user_id: int):
 
 async def update_profile(user_id: int, **kwargs):
     async with bot.db.acquire() as conn:
+        set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(kwargs.keys())])
+        values = [user_id] + list(kwargs.values())
+        await conn.execute(f"""
+            UPDATE profiles
+            SET {set_clause}
+            WHERE user_id = $1
+        """, *values)
+
+async def add_xp(user_id: int, xp_amount: int):
+    profile = await get_profile(user_id)
+    new_xp = profile['xp'] + xp_amount
+    new_level = profile['level']
+    
+    if new_xp >= new_level * 100:
+        new_level += 1
+        new_xp = 0
+    
+    await update_profile(user_id, xp=new_xp, level=new_level)
+    return new_level > profile['level']
 
 set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(kwargs.keys())])
         values = [user_id] + list(kwargs.values())
