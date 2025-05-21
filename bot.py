@@ -218,7 +218,7 @@ async def get_profile(user_id: int):
         
         async def update_profile(user_id: int, **kwargs):
     
-    if not kwargs:  # Если нет полей для обновления
+    if not kwargs: 
         return
         
     async with bot.db.acquire() as conn:
