@@ -1,3 +1,4 @@
+        
 import discord
 from discord.ext import commands
 from discord.ext.commands import CommandOnCooldown
@@ -70,38 +71,37 @@ async def create_db_pool():
         )
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
-            # Создаем таблицы (ФИКС ОТСТУПОВ В SQL-ЗАПРОСЕ)
             await conn.execute("""
-CREATE TABLE IF NOT EXISTS profiles (
-    user_id BIGINT PRIMARY KEY,
-    bio TEXT DEFAULT '',
-    level INTEGER DEFAULT 1,
-    xp INTEGER DEFAULT 0,
-    achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
-    last_daily TIMESTAMP DEFAULT NULL
-);
+                CREATE TABLE IF NOT EXISTS profiles (
+                    user_id BIGINT PRIMARY KEY,
+                    bio TEXT DEFAULT '',
+                    level INTEGER DEFAULT 1,
+                    xp INTEGER DEFAULT 0,
+                    achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
+                    last_daily TIMESTAMP DEFAULT NULL
+                )
             """)
             await conn.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id BIGINT PRIMARY KEY,
-    balance INTEGER DEFAULT 0
-);
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    balance INTEGER DEFAULT 0
+                )
             """)
             await conn.execute("""
-CREATE TABLE IF NOT EXISTS custom_roles (
-    user_id BIGINT PRIMARY KEY,
-    role_id BIGINT,
-    role_name TEXT,
-    role_color TEXT
-);
+                CREATE TABLE IF NOT EXISTS custom_roles (
+                    user_id BIGINT PRIMARY KEY,
+                    role_id BIGINT,
+                    role_name TEXT,
+                    role_color TEXT
+                )
             """)
             await conn.execute("""
-CREATE TABLE IF NOT EXISTS command_cooldowns (
-    user_id BIGINT,
-    command_name TEXT,
-    cooldown_end TIMESTAMP,
-    PRIMARY KEY (user_id, command_name)
-);
+                CREATE TABLE IF NOT EXISTS command_cooldowns (
+                    user_id BIGINT,
+                    command_name TEXT,
+                    cooldown_end TIMESTAMP,
+                    PRIMARY KEY (user_id, command_name)
+                )
             """)
         return pool
     except Exception as e:
@@ -215,20 +215,21 @@ async def get_profile(user_id: int):
             await conn.execute("INSERT INTO profiles (user_id) VALUES ($1)", user_id)
             profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
         return profile
-        
-        async def update_profile(user_id: int, **kwargs):
+
+async def update_profile(user_id: int, **kwargs):
     """Обновляет данные профиля пользователя"""
-    if not kwargs:  # Если нет полей для обновления
+    if not kwargs:
         return
         
     async with bot.db.acquire() as conn:
-        # Формируем SET часть запроса
-        set_parts = [f"{field} = ${i+1}" for i, field in enumerate(kwargs.keys())]
+        set_parts = []
+        values = []
+        for i, (key, value) in enumerate(kwargs.items(), start=1):
+            set_parts.append(f"{key} = ${i}")
+            values.append(value)
         
-        # Формируем список значений (сначала kwargs, потом user_id)
-        values = list(kwargs.values()) + [user_id]
+        values.append(user_id)
         
-        # Собираем SQL запрос
         query = f"""
             UPDATE profiles
             SET {', '.join(set_parts)}
@@ -236,25 +237,6 @@ async def get_profile(user_id: int):
         """
         
         await conn.execute(query, *values)
-async def add_xp(user_id: int, xp_amount: int):
-    profile = await get_profile(user_id)
-    new_xp = profile['xp'] + xp_amount
-    new_level = profile['level']
-    
-    if new_xp >= new_level * 100:
-        new_level += 1
-        new_xp = 0
-    
-    await update_profile(user_id, xp=new_xp, level=new_level)
-    return new_level > profile['level']
-
-set_clause = ", ".join([f"{k} = ${i+2}" for i, k in enumerate(kwargs.keys())])
-        values = [user_id] + list(kwargs.values())
-        await conn.execute(f"""
-            UPDATE profiles
-            SET {set_clause}
-            WHERE user_id = $1
-        """, *values)
 
 async def add_xp(user_id: int, xp_amount: int):
     profile = await get_profile(user_id)
@@ -267,6 +249,8 @@ async def add_xp(user_id: int, xp_amount: int):
     
     await update_profile(user_id, xp=new_xp, level=new_level)
     return new_level > profile['level']
+
+# ... (остальные функции и команды бота остаются без изменений)
 
 @bot.command(name="профиль")
 async def profile(ctx, member: discord.Member = None):
