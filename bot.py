@@ -1,3 +1,130 @@
+import discord
+from discord.ext import commands
+from discord.ext.commands import CommandOnCooldown
+import random
+import os
+import asyncpg
+import sys
+import asyncio
+import time
+from datetime import datetime
+
+# Настройки
+TOKEN = os.getenv("DISCORD_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://postgres:KoiwhbfRHSNZZfrsDHRsniDsoRonHDPx@ballast.proxy.rlwy.net:53277/railway"
+ROLE_NAME = "Патриот"
+CUSTOM_ROLE_PRICE = 2000
+CRIT_CHANCE = 10
+SUCCESS_CHANCE = 40
+ADMIN_ROLES = ["создатель", "главный модер"]
+ROB_CHANCE = 25
+ROB_PERCENT = 20
+ROB_COOLDOWN = 3600
+CASINO_COOLDOWN = 60
+BUCKSHOT_COOLDOWN = 1800
+CASINO_MULTIPLIERS = {
+    2: 35,
+    3: 10,
+    5: 2,
+    0: 53
+}
+
+# Константы для ивентов
+EVENT_ACTIVE = False
+EVENT_MULTIPLIER = 1.0
+EVENT_TYPE = None
+EVENT_END_TIME = 0
+
+# Глобальные переменные для бакшота
+active_buckshots = {}
+BUCKSHOT_GIF = "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExb21peDBuYWEzazhhb2EweWhzazd3NjkydnZ0dHI5M2x6b3d5aHdtdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/DQb9xdHQwFl9fvJ1ls/giphy.gif"
+
+def is_admin(member: discord.Member) -> bool:
+    return any(role.name.lower() in ADMIN_ROLES for role in member.roles)
+
+# Проверка обязательных переменных
+if not TOKEN:
+    print("❌ Ошибка: Не установлен DISCORD_TOKEN")
+    sys.exit(1)
+
+if not DATABASE_URL:
+    print("❌ Ошибка: Не установлен DATABASE_URL")
+    sys.exit(1)
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+async def create_db_pool():
+    try:
+        print("⌛ Подключаюсь к базе данных...")
+        pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=5,
+            command_timeout=10,
+            server_settings={'application_name': 'discord-bot'}
+        )
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS profiles (
+                    user_id BIGINT PRIMARY KEY,
+                    bio TEXT DEFAULT '',
+                    level INTEGER DEFAULT 1,
+                    xp INTEGER DEFAULT 0,
+                    achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
+                    last_daily TIMESTAMP DEFAULT NULL
+                )
+            """)
+        return pool
+    except Exception as e:
+        print(f"❌ Ошибка подключения к базе данных: {e}")
+        sys.exit(1)
+
+@bot.event
+async def on_ready():
+    try:
+        bot.db = await create_db_pool()
+        async with bot.db.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    balance INTEGER DEFAULT 0
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS custom_roles (
+                    user_id BIGINT PRIMARY KEY,
+                    role_id BIGINT,
+                    role_name TEXT,
+                    role_color TEXT
+                )
+            """)
+        print(f"✅ Бот запущен как {bot.user}")
+    except Exception as e:
+        print(f"❌ Критическая ошибка при запуске бота: {e}")
+        await bot.close()
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, CommandOnCooldown):
+        seconds = int(error.retry_after)
+        minutes = seconds // 60
+        seconds = seconds % 60
+        await ctx.send(f"⏳ Подождите {minutes}м {seconds}с перед повторным использованием!")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Не хватает аргумента: {error.param.name}")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Неверный тип аргумента!")
+    elif isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ У вас нет прав для этой команды!")
+    else:
+        print(f"⚠ Необработанная ошибка: {type(error)} - {error}")
+        await ctx.send("❌ Произошла неизвестная ошибка при выполнении команды")
+
 async def close_db():
     if hasattr(bot, 'db') and not bot.db.is_closed():
         await bot.db.close()
