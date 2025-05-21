@@ -565,25 +565,42 @@ async def transfer(ctx, member: discord.Member, amount: int):
     await ctx.send(f'✅ {ctx.author.mention} перевел {amount} кредитов {member.mention}!')
 
 @bot.command(name="топ")
-@commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
+@commands.cooldown(1, 10, commands.BucketType.user)
 async def top(ctx):
-    async with bot.db.acquire() as conn:
-        top_users = await conn.fetch("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10")
+    """Показывает топ-10 игроков по балансу"""
+    try:
+        async with bot.db.acquire() as conn:
+            top_users = await conn.fetch(
+                "SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10"
+            )
 
-    if not top_users:
-        await ctx.send("😔 Таблица пуста.")
-        return
+        if not top_users:
+            return await ctx.send("😔 В топе пока никого нет.")
 
-    leaderboard = []
-    for i, record in enumerate(top_users, start=1):
-        try:
-            user = await bot.fetch_user(record['user_id'])
-            leaderboard.append(f"{i}. {user.name} — {record['balance']} кредитов")
-        except:
-            leaderboard.append(f"{i}. [Неизвестный] — {record['balance']} кредитов")
+        leaderboard = []
+        for i, record in enumerate(top_users, start=1):
+            try:
+                user = await bot.fetch_user(record['user_id'])
+                leaderboard.append(f"{i}. {user.display_name} — {record['balance']} кредитов")
+            except discord.NotFound:
+                leaderboard.append(f"{i}. [Неизвестный пользователь] — {record['balance']} кредитов")
+            except Exception as e:
+                print(f"Ошибка при получении пользователя {record['user_id']}: {e}")
+                leaderboard.append(f"{i}. [Ошибка загрузки] — {record['balance']} кредитов")
 
-await ctx.send("🏆 Топ 10:\n" + "\n".join(leaderboard))
-
+        embed = discord.Embed(
+            title="🏆 Топ-10 богатейших игроков",
+            description="\n".join(leaderboard),
+            color=0xffd700
+        )
+        embed.set_footer(text=f"Запросил: {ctx.author.display_name}")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        print(f"Ошибка в команде 'топ': {e}")
+        await ctx.send("⚠️ Произошла ошибка при получении топа. Попробуйте позже.")
+        
 @bot.command(name="допкредит")
 async def add_credits(ctx, member: discord.Member, amount: int):
     if not is_admin(ctx.author):
