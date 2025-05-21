@@ -220,21 +220,21 @@ async def update_profile(user_id: int, **kwargs):
     """Обновляет данные профиля пользователя"""
     if not kwargs:  # Если нет полей для обновления
         return
+        async def update_profile(user_id: int, **kwargs):
+    """Обновляет данные профиля пользователя"""
+    if not kwargs:  # Если нет полей для обновления
+        return
         
     async with bot.db.acquire() as conn:
-        # Формируем SET часть запроса и список значений
-        set_parts = []
-        values = []
-        for i, (key, value) in enumerate(kwargs.items(), start=1):
-            set_parts.append(f"{key} = ${i}")
-            values.append(value)
+        # Создаем список полей для обновления
+        set_clause = ", ".join([f"{field} = ${i+1}" for i, field in enumerate(kwargs.keys())])
         
-        # Добавляем user_id в конец значений для WHERE условия
-        values.append(user_id)
+        # Формируем список значений (сначала новые значения, потом user_id)
+        values = list(kwargs.values()) + [user_id]
         
         query = f"""
             UPDATE profiles
-            SET {', '.join(set_parts)}
+            SET {set_clause}
             WHERE user_id = ${len(kwargs) + 1}
         """
         
