@@ -215,27 +215,27 @@ async def get_profile(user_id: int):
             await conn.execute("INSERT INTO profiles (user_id) VALUES ($1)", user_id)
             profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
         return profile
+        
 async def update_profile(user_id: int, **kwargs):
+    """Обновляет данные профиля пользователя"""
+    if not kwargs:  # Если нет полей для обновления
+        return
+        
     async with bot.db.acquire() as conn:
-        if not kwargs:
-            return
-            
-        # Создаем SET часть запроса
+        # Формируем SET часть запроса и список значений
         set_parts = []
         values = []
-        index = 1
-        for key, value in kwargs.items():
-            set_parts.append(f"{key} = ${index}")
+        for i, (key, value) in enumerate(kwargs.items(), start=1):
+            set_parts.append(f"{key} = ${i}")
             values.append(value)
-            index += 1
         
-        # Добавляем user_id в конец значений
+        # Добавляем user_id в конец значений для WHERE условия
         values.append(user_id)
         
         query = f"""
             UPDATE profiles
             SET {', '.join(set_parts)}
-            WHERE user_id = ${index}
+            WHERE user_id = ${len(kwargs) + 1}
         """
         
         await conn.execute(query, *values)
