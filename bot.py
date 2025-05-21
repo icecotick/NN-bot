@@ -216,10 +216,6 @@ async def get_profile(user_id: int):
             profile = await conn.fetchrow("SELECT * FROM profiles WHERE user_id = $1", user_id)
         return profile
         
-async def update_profile(user_id: int, **kwargs):
-    """Обновляет данные профиля пользователя"""
-    if not kwargs:  # Если нет полей для обновления
-        return
         async def update_profile(user_id: int, **kwargs):
     """Обновляет данные профиля пользователя"""
     if not kwargs:  # Если нет полей для обновления
