@@ -217,7 +217,7 @@ async def get_profile(user_id: int):
         return profile
         
         async def update_profile(user_id: int, **kwargs):
-    """Обновляет данные профиля пользователя"""
+    
     if not kwargs:  # Если нет полей для обновления
         return
         
